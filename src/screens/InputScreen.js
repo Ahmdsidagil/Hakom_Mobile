@@ -11,6 +11,7 @@ import {
   Platform,
   Modal,
   Alert,
+  Animated,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { getDatabase, addPrice } from "../../config/database";
@@ -20,7 +21,7 @@ export default function InputScreen({ navigation, route }) {
   const [commodities, setCommodities] = useState([]);
   const [filteredCommodities, setFilteredCommodities] = useState([]);
 
-  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [selectedCategories, setSelectedCategories] = useState([]);
   const [selectedCommodity, setSelectedCommodity] = useState(null);
   const [unit, setUnit] = useState("");
   const [price, setPrice] = useState("");
@@ -31,6 +32,9 @@ export default function InputScreen({ navigation, route }) {
   const [searchKomoditas, setSearchKomoditas] = useState("");
 
   const [loading, setLoading] = useState(false);
+
+  const [snackbarMessage, setSnackbarMessage] = useState("");
+  const [snackbarAnim] = useState(new Animated.Value(0));
 
   // ================== INIT DATA ==================
   useEffect(() => {
@@ -49,13 +53,58 @@ export default function InputScreen({ navigation, route }) {
     }
   };
 
+  // ================== SNACKBAR ==================
+  const showSnackbar = (message) => {
+    setSnackbarMessage(message);
+    Animated.timing(snackbarAnim, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start(() => {
+      setTimeout(() => {
+        Animated.timing(snackbarAnim, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }).start();
+      }, 1500);
+    });
+  };
+
   // ================== HANDLER ==================
-  const handleSelectCategory = (category) => {
-    setSelectedCategory(category);
-    setSelectedCommodity(null);
-    setUnit("");
-    const filtered = commodities.filter((c) => c.category_id === category.id);
+  const handleToggleCategory = (category) => {
+    let newSelection = [...selectedCategories];
+    const index = selectedCategories.findIndex((c) => c.id === category.id);
+    if (index > -1) {
+      newSelection.splice(index, 1);
+    } else {
+      newSelection.push(category);
+    }
+    setSelectedCategories(newSelection);
+
+    const filtered = commodities.filter((c) =>
+      newSelection.some((cat) => cat.id === c.category_id)
+    );
     setFilteredCommodities(filtered);
+
+    if (selectedCommodity && !filtered.some((c) => c.id === selectedCommodity.id)) {
+      setSelectedCommodity(null);
+      setUnit("");
+    }
+  };
+
+  const handleToggleSelectAllCategories = () => {
+    if (selectedCategories.length === categories.length) {
+      // Jika semua sudah dipilih → batal pilih semua
+      setSelectedCategories([]);
+      setFilteredCommodities([]);
+      setSelectedCommodity(null);
+      setUnit("");
+    } else {
+      // Pilih semua
+      setSelectedCategories([...categories]);
+      setFilteredCommodities([...commodities]);
+    }
   };
 
   const handleSelectCommodity = (commodity) => {
@@ -76,7 +125,7 @@ export default function InputScreen({ navigation, route }) {
 
   // ================== SIMPAN DATA ==================
   const handleSubmit = async () => {
-    if (!selectedCategory || !selectedCommodity || !price) {
+    if (selectedCategories.length === 0 || !selectedCommodity || !price) {
       Alert.alert("Peringatan", "Semua field wajib diisi!");
       return;
     }
@@ -89,35 +138,45 @@ export default function InputScreen({ navigation, route }) {
 
     setLoading(true);
     try {
-      // 🔹 Tambahkan tanggal saat input
       const tanggalInput = new Date().toISOString();
 
-      // 🔹 Simpan ke database lokal beserta tanggal
-      await addPrice(
-        selectedCommodity.id,
-        selectedCategory.id,
-        priceNumber,
-        unit,
-        tanggalInput // ✅ parameter tanggal
+      const relevantCategories = selectedCategories.filter(
+        (cat) => cat.id === selectedCommodity.category_id
       );
 
-      Alert.alert("✅ Berhasil", "Data harga disimpan ke database lokal dan riwayat.");
+      if (relevantCategories.length === 0) {
+        Alert.alert(
+          "Peringatan",
+          "Komoditas yang dipilih tidak sesuai kategori yang dipilih!"
+        );
+        setLoading(false);
+        return;
+      }
 
-      // Reset form
+      for (const category of relevantCategories) {
+        await addPrice(
+          selectedCommodity.id,
+          category.id,
+          priceNumber,
+          unit,
+          tanggalInput
+        );
+      }
+
+      // Snackbar notification
+      showSnackbar("✅ Data harga berhasil disimpan");
+
+      // Reset harga & komoditas tapi **kategori tetap dipilih**
       setPrice("");
-      setSelectedCategory(null);
       setSelectedCommodity(null);
       setUnit("");
 
-      // Callback untuk update Dashboard
       if (route?.params?.onAddPrice) {
         await route.params.onAddPrice();
       }
-
-      navigation.goBack();
     } catch (error) {
       console.error("❌ Gagal menyimpan data:", error);
-      Alert.alert("Gagal", "Terjadi kesalahan saat menyimpan data.");
+      showSnackbar("❌ Terjadi kesalahan saat menyimpan data");
     } finally {
       setLoading(false);
     }
@@ -154,8 +213,10 @@ export default function InputScreen({ navigation, route }) {
           style={styles.dropdownHeader}
           onPress={() => setModalKategoriVisible(true)}
         >
-          <Text style={{ color: selectedCategory ? "#000" : "#9CA3AF", flex: 1 }}>
-            {selectedCategory ? selectedCategory.name_category : "Pilih kategori"}
+          <Text style={{ color: selectedCategories.length ? "#000" : "#9CA3AF", flex: 1 }}>
+            {selectedCategories.length
+              ? selectedCategories.map((c) => c.name_category).join(", ")
+              : "Pilih kategori"}
           </Text>
           <Ionicons name="chevron-down" size={18} color="#174A6A" />
         </TouchableOpacity>
@@ -165,8 +226,8 @@ export default function InputScreen({ navigation, route }) {
         <TouchableOpacity
           style={styles.dropdownHeader}
           onPress={() => {
-            if (!selectedCategory) {
-              Alert.alert("Peringatan", "Pilih kategori terlebih dahulu!");
+            if (selectedCategories.length === 0) {
+              Alert.alert("Peringatan", "Pilih minimal satu kategori terlebih dahulu!");
               return;
             }
             setModalKomoditasVisible(true);
@@ -221,19 +282,29 @@ export default function InputScreen({ navigation, route }) {
               value={searchKategori}
               onChangeText={setSearchKategori}
             />
+            <TouchableOpacity
+              style={styles.selectAllButton}
+              onPress={handleToggleSelectAllCategories}
+            >
+              <Text style={styles.selectAllText}>
+                {selectedCategories.length === categories.length ? "Batal Pilih Semua" : "Pilih Semua"}
+              </Text>
+            </TouchableOpacity>
             <ScrollView style={{ maxHeight: 300 }}>
-              {filteredCategories.map((item) => (
-                <TouchableOpacity
-                  key={item.id}
-                  style={styles.optionItem}
-                  onPress={() => {
-                    handleSelectCategory(item);
-                    setModalKategoriVisible(false);
-                  }}
-                >
-                  <Text style={styles.optionText}>{item.name_category}</Text>
-                </TouchableOpacity>
-              ))}
+              {filteredCategories.map((item) => {
+                const isSelected = selectedCategories.some((c) => c.id === item.id);
+                return (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={[styles.optionItem, isSelected && { backgroundColor: "#E0F2FE" }]}
+                    onPress={() => handleToggleCategory(item)}
+                  >
+                    <Text style={styles.optionText}>
+                      {item.name_category} {isSelected ? "✅" : ""}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
             <TouchableOpacity onPress={() => setModalKategoriVisible(false)} style={styles.closeButton}>
               <Text style={styles.closeText}>Tutup</Text>
@@ -254,18 +325,27 @@ export default function InputScreen({ navigation, route }) {
               onChangeText={setSearchKomoditas}
             />
             <ScrollView style={{ maxHeight: 300 }}>
-              {filteredComs.map((item) => (
-                <TouchableOpacity
-                  key={item.id}
-                  style={styles.optionItem}
-                  onPress={() => {
-                    handleSelectCommodity(item);
-                    setModalKomoditasVisible(false);
-                  }}
-                >
-                  <Text style={styles.optionText}>{item.name_commodity}</Text>
-                </TouchableOpacity>
-              ))}
+              {filteredComs.map((item) => {
+                const categoryNames = selectedCategories
+                  .filter((cat) => cat.id === item.category_id)
+                  .map((cat) => cat.name_category)
+                  .join(", ");
+
+                return (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={styles.optionItem}
+                    onPress={() => {
+                      handleSelectCommodity(item);
+                      setModalKomoditasVisible(false);
+                    }}
+                  >
+                    <Text style={styles.optionText}>
+                      {item.name_commodity} {categoryNames ? `(Kategori: ${categoryNames})` : ""}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
             <TouchableOpacity onPress={() => setModalKomoditasVisible(false)} style={styles.closeButton}>
               <Text style={styles.closeText}>Tutup</Text>
@@ -273,6 +353,28 @@ export default function InputScreen({ navigation, route }) {
           </View>
         </View>
       </Modal>
+
+      {/* Snackbar */}
+      {snackbarMessage ? (
+        <Animated.View
+          style={[
+            styles.snackbar,
+            {
+              opacity: snackbarAnim,
+              transform: [
+                {
+                  translateY: snackbarAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [50, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <Text style={styles.snackbarText}>{snackbarMessage}</Text>
+        </Animated.View>
+      ) : null}
     </KeyboardAvoidingView>
   );
 }
@@ -297,4 +399,8 @@ const styles = StyleSheet.create({
   optionText: { color: "#333" },
   closeButton: { marginTop: 10, alignItems: "center" },
   closeText: { color: "#174A6A", fontWeight: "600" },
+  selectAllButton: { paddingVertical: 10, backgroundColor: "#E0F2FE", borderRadius: 8, alignItems: "center", marginBottom: 8 },
+  selectAllText: { fontWeight: "600", color: "#174A6A" },
+  snackbar: { position: "absolute", bottom: 30, left: 20, right: 20, backgroundColor: "#16A34A", padding: 12, borderRadius: 10, alignItems: "center" },
+  snackbarText: { color: "#fff", fontWeight: "600" },
 });

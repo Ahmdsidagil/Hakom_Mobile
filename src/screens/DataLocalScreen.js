@@ -1,5 +1,5 @@
-// DataLocalScreen.js (lengkap + tanggal+jam sesuai input)
-import React, { useState, useCallback } from "react";
+// DataLocalScreen.js (lengkap + tanggal+jam sesuai input + kategori dinamis)
+import React, { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -14,7 +14,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "@react-navigation/native";
-import { getAllLocalPrices, deleteLocalPrice, addRiwayatHapus } from "../../config/database";
+import { getAllLocalPrices, deleteLocalPrice, addRiwayatHapus, getDatabase } from "../../config/database";
 
 export default function DataLocalScreen({ navigation }) {
   const [search, setSearch] = useState("");
@@ -23,16 +23,57 @@ export default function DataLocalScreen({ navigation }) {
   const [selectedItems, setSelectedItems] = useState([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [dataKomoditas, setDataKomoditas] = useState([]);
+  const [kategori, setKategori] = useState(["Semua"]);
 
-  const kategori = ["Semua", "Sayuran", "Daging", "Ikan", "Buah", "Telur", "Lainnya"];
+  // ================== Ambil kategori dari database ==================
+  const fetchCategories = async () => {
+    try {
+      const db = await getDatabase();
+      const categoriesResult = await db.getAllAsync("SELECT * FROM categories;");
+      const kategoriNames = categoriesResult.map((c) => c.name_category);
+      setKategori(["Semua", ...kategoriNames]); // tab "Semua" + kategori dinamis
+    } catch (error) {
+      console.error("❌ Gagal ambil kategori:", error);
+    }
+  };
 
-  // Format tanggal header (hanya tanggal)
+  // ================== Ambil data lokal ==================
+  const fetchData = async () => {
+    try {
+      const data = await getAllLocalPrices();
+      if (data && data.length > 0) {
+        const mapped = data.map((item) => ({
+          id: item.id,
+          nama: item.name_commodity,
+          harga: `Rp ${item.price.toLocaleString("id-ID")}`,
+          satuan: item.unit || "-",
+          tanggal: item.tanggal || null,
+          kategori: item.name_category || "Lainnya",
+          gambar: "https://cdn-icons-png.flaticon.com/512/415/415682.png",
+        }));
+        setDataKomoditas(mapped);
+      } else {
+        setDataKomoditas([]);
+      }
+    } catch (err) {
+      console.error("❌ Gagal ambil data lokal:", err);
+    }
+  };
+
+  // ================== Refresh data & kategori saat screen fokus ==================
+  useFocusEffect(
+    useCallback(() => {
+      fetchCategories();
+      fetchData();
+    }, [])
+  );
+
+  // ================== Format tanggal ==================
   const formatTanggalHeader = () => {
     const now = new Date();
     return now.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
   };
 
-  // Format tanggal item (tanggal + jam)
   const formatTanggalItem = (tgl) => {
     if (!tgl) return "-";
     const dateObj = new Date(tgl);
@@ -40,35 +81,7 @@ export default function DataLocalScreen({ navigation }) {
     return `${dateObj.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}, ${dateObj.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}`;
   };
 
-  // Ambil data lokal saat screen fokus
-  useFocusEffect(
-    useCallback(() => {
-      const fetchData = async () => {
-        try {
-          const data = await getAllLocalPrices();
-          if (data && data.length > 0) {
-            const mapped = data.map((item) => ({
-              id: item.id,
-              nama: item.name_commodity,
-              harga: `Rp ${item.price.toLocaleString("id-ID")}`,
-              satuan: item.unit || "-",
-              tanggal: item.tanggal || null, // simpan mentah
-              kategori: item.name_category || "Lainnya",
-              gambar: "https://cdn-icons-png.flaticon.com/512/415/415682.png",
-            }));
-            setDataKomoditas(mapped);
-          } else {
-            setDataKomoditas([]);
-          }
-        } catch (err) {
-          console.error("❌ Gagal ambil data lokal:", err);
-        }
-      };
-      fetchData();
-    }, [])
-  );
-
-  // Pilih semua / batal pilih semua
+  // ================== Pilih semua / batal ==================
   const handleSelectAll = () => {
     if (selectedItems.length === dataKomoditas.length) {
       setSelectedItems([]);
@@ -80,7 +93,7 @@ export default function DataLocalScreen({ navigation }) {
     setMenuVisible(false);
   };
 
-  // Hapus data terpilih
+  // ================== Hapus data ==================
   const handleDelete = () => {
     Alert.alert(
       "Konfirmasi Hapus",
@@ -102,9 +115,8 @@ export default function DataLocalScreen({ navigation }) {
                   price: item.harga.replace("Rp ", "").replace(/\./g, ""),
                   unit: item.satuan,
                   name_category: item.kategori,
-                  tanggal: item.tanggal, // simpan mentah (termasuk jam input)
+                  tanggal: item.tanggal,
                 });
-
                 await deleteLocalPrice(item.id);
               }
 
@@ -126,7 +138,7 @@ export default function DataLocalScreen({ navigation }) {
     );
   };
 
-  // Toggle pilih item
+  // ================== Toggle pilih item ==================
   const toggleSelectItem = (id) => {
     let updated;
     if (selectedItems.includes(id)) {
@@ -138,12 +150,12 @@ export default function DataLocalScreen({ navigation }) {
     if (updated.length === 0) setIsSelectionMode(false);
   };
 
-  // Simulasi sinkronisasi
+  // ================== Sinkronisasi ==================
   const handleSync = () => {
     alert("🔄 Data lokal sedang disinkronkan ke server...");
   };
 
-  // Filter berdasarkan search & kategori
+  // ================== Filter data ==================
   const filteredData = dataKomoditas.filter((item) => {
     const matchSearch = item.nama?.toLowerCase().includes(search.toLowerCase().trim());
     const matchCategory = selectedTab === "Semua" || item.kategori === selectedTab;
@@ -220,7 +232,7 @@ export default function DataLocalScreen({ navigation }) {
           </View>
         </View>
 
-        {/* TAB KATEGORI */}
+        {/* TAB KATEGORI DINAMIS */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View style={styles.tabRow}>
             {kategori.map((item) => (
@@ -330,7 +342,7 @@ export default function DataLocalScreen({ navigation }) {
   );
 }
 
-// Styles tetap sama
+// ================== STYLES ==================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },
   header: { paddingTop: 50, paddingHorizontal: 16, paddingBottom: 16, borderBottomLeftRadius: 20, borderBottomRightRadius: 20 },

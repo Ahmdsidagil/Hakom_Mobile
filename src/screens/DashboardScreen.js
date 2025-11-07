@@ -26,11 +26,11 @@ export default function DashboardScreen({ navigation }) {
   const [dashboardData, setDashboardData] = useState({ latest_prices: [] });
   const [greeting, setGreeting] = useState("");
 
-  // helper untuk load riwayat
+  // Helper untuk load riwayat
   const loadRiwayatPendataan = async () => {
     const riwayatData = await getAllRiwayatPendataan();
 
-    // urutkan descending berdasarkan tanggal/created_at
+    // Urutkan descending berdasarkan tanggal/created_at
     const sorted = riwayatData?.sort((a, b) => {
       const dateA = new Date(a.tanggal || a.created_at);
       const dateB = new Date(b.tanggal || b.created_at);
@@ -48,7 +48,7 @@ export default function DashboardScreen({ navigation }) {
       await initDatabase();
       await loadRiwayatPendataan();
 
-      // ambil info user & pasar dari server (jika online)
+      // Ambil info user & pasar dari server (jika online)
       const token = await AsyncStorage.getItem("token");
       if (token) {
         try {
@@ -72,7 +72,7 @@ export default function DashboardScreen({ navigation }) {
         }
       }
 
-      // greeting waktu
+      // Greeting berdasarkan jam
       const hour = new Date().getHours();
       if (hour >= 4 && hour < 11) setGreeting("Selamat Pagi");
       else if (hour >= 11 && hour < 15) setGreeting("Selamat Siang");
@@ -93,6 +93,21 @@ export default function DashboardScreen({ navigation }) {
   };
 
   const handleNotifikasi = () => navigation.navigate("Notification");
+
+  // Format tanggal + jam
+  const formatTanggalItem = (tgl) => {
+    if (!tgl) return "-";
+    const dateObj = new Date(tgl);
+    if (isNaN(dateObj.getTime())) return "-";
+    return `${dateObj.toLocaleDateString("id-ID", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    })}, ${dateObj.toLocaleTimeString("id-ID", {
+      hour: "2-digit",
+      minute: "2-digit",
+    })}`;
+  };
 
   return (
     <View style={styles.container}>
@@ -152,18 +167,11 @@ export default function DashboardScreen({ navigation }) {
                   <Text style={styles.itemPrice}>
                     Rp {item.price?.toLocaleString("id-ID")}/{item.unit}
                   </Text>
-                  <Text style={styles.itemDate}>
-                    {item.tanggal
-                      ? `${new Date(item.tanggal).toLocaleDateString("id-ID", {
-                          day: "numeric",
-                          month: "short",
-                          year: "numeric",
-                        })}, ${new Date(item.tanggal).toLocaleTimeString("id-ID", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}`
-                      : "-"}
-                    </Text>
+                  <Text style={styles.itemDate}>{formatTanggalItem(item.tanggal)}</Text>
+                  {/* Tambahkan kategori */}
+                  <Text style={styles.itemCategory}>
+                    {item.name_category || item.kategori || "Lainnya"}
+                  </Text>
                 </View>
               </View>
             ))
@@ -242,5 +250,6 @@ const styles = StyleSheet.create({
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "600" },
   itemDate: { fontSize: 12, color: "#6B7280" },
+  itemCategory: { fontSize: 12, color: "#9CA3AF", marginTop: 2, fontStyle: "italic" },
   emptyText: { color: "#6B7280", textAlign: "center", marginTop: 20 },
 });
