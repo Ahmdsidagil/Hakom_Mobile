@@ -7,7 +7,8 @@ export default {
   CATEGORIES: `${BASE_URL}/categories`,
   COMMODITIES: `${BASE_URL}/commodities`,
   ADD_PRICE: `${BASE_URL}/prices/add`,
-  UPDATE_PASSWORD: `${BASE_URL}/users/update-password`, // 🔑 endpoint ubah kata sandi
+  UPDATE_PASSWORD: `${BASE_URL}/users/update-password`,
+  GET_MARKET: `${BASE_URL}/markets`, // 🔑 endpoint ubah kata sandi
 };
 
 // Ambil data dashboard
@@ -31,22 +32,22 @@ export const getDashboard = async (token) => {
 // 🔐 Fungsi ubah kata sandi
 export const updatePassword = async (token, oldPassword, newPassword) => {
   try {
-    const response = await fetch(`${BASE_URL}/users/update-password`, {
-      method: "POST",
+    const response = await fetch(`${BASE_URL}/users/change-password`, {
+      method: "PUT",
       headers: {
-        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        old_password: oldPassword,
-        new_password: newPassword,
-      }),
+      body: JSON.stringify({ oldPassword, newPassword }),
     });
 
-    const data = await response.json();
-    return data;
+    // sebelum parse, cek status
+    const text = await response.text();
+    console.log("Response raw dari server:", text);
+
+    return JSON.parse(text);
   } catch (error) {
-    console.error("❌ Gagal update password:", error);
-    return null;
+    console.error("❌ API updatePassword error:", error);
+    return { success: false, message: "Koneksi ke server gagal" };
   }
 };

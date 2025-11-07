@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -13,6 +13,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { useFocusEffect } from "@react-navigation/native";
+import { getRiwayatHapus } from "../../config/database"; // ⬅️ pastikan path sesuai
 
 export default function RiwayatScreen({ navigation }) {
   const [search, setSearch] = useState("");
@@ -21,63 +23,44 @@ export default function RiwayatScreen({ navigation }) {
   const [filterStatus, setFilterStatus] = useState("Semua");
   const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [dataRiwayat, setDataRiwayat] = useState([]); // ⬅️ sekarang ambil dari DB
 
   const kategori = ["Semua", "Sayuran", "Daging", "Ikan", "Buah", "Telur"];
 
-  const dataRiwayat = [
-    {
-      id: 1,
-      nama: "Daging Ayam",
-      harga: "Rp. 15.000/kg",
-      tanggal: "10 Okt 2025, 08.00 WIB",
-      gambar: "https://cdn-icons-png.flaticon.com/512/3069/3069179.png",
-      status: "upload",
-      kategori: "Daging",
-    },
-    {
-      id: 2,
-      nama: "Tomat",
-      harga: "Rp. 10.000/kg",
-      tanggal: "10 Okt 2025, 08.00 WIB",
-      gambar: "https://cdn-icons-png.flaticon.com/512/415/415682.png",
-      status: "hapus",
-      kategori: "Sayuran",
-    },
-    {
-      id: 3,
-      nama: "Ikan Nila",
-      harga: "Rp. 25.000/kg",
-      tanggal: "11 Okt 2025, 10.30 WIB",
-      gambar: "https://cdn-icons-png.flaticon.com/512/616/616408.png",
-      status: "edit",
-      kategori: "Ikan",
-    },
-  ];
+  // 🔹 Ambil data dari database setiap kali screen difokuskan
+  useFocusEffect(
+    useCallback(() => {
+      const fetchRiwayat = async () => {
+        const data = await getRiwayatHapus();
+        console.log("📦 Riwayat dari DB:", data);
+        setDataRiwayat(data);
+      };
+      fetchRiwayat();
+    }, [])
+  );
 
-  // ✅ Format tanggal seperti "1 Jan 2002"
+  // 🔹 Format tanggal biar rapi
   const formatDate = (tgl) => {
-    const options = { day: "numeric", month: "short", year: "numeric" };
-    return tgl.toLocaleDateString("id-ID", options).replace(/\./g, "");
+    try {
+      return new Date(tgl).toLocaleDateString("id-ID", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+    } catch {
+      return tgl;
+    }
   };
 
-  const getStatusIcon = (status) => {
-    if (status === "upload")
-      return <Text style={[styles.statusText, { color: "#22C55E" }]}>Sinkron</Text>;
-    if (status === "hapus")
-      return <Text style={[styles.statusText, { color: "#EF4444" }]}>Hapus</Text>;
-    if (status === "edit")
-      return <Text style={[styles.statusText, { color: "#FACC15" }]}>Edit</Text>;
-    return null;
-  };
-
-  // 🔍 FILTER BERDASARKAN SEARCH, STATUS, DAN KATEGORI
+  // 🔹 Filter data berdasarkan search, kategori, dan tanggal
   const filteredData = dataRiwayat.filter((item) => {
-    const cocokSearch = item.nama.toLowerCase().includes(search.toLowerCase());
-    const cocokStatus =
-      filterStatus === "Semua" ? true : item.status === filterStatus;
+    const cocokSearch =
+      item.name_commodity?.toLowerCase().includes(search.toLowerCase()) ?? false;
     const cocokKategori =
-      selectedTab === "Semua" ? true : item.kategori === selectedTab;
-    return cocokSearch && cocokStatus && cocokKategori;
+      selectedTab === "Semua"
+        ? true
+        : item.name_category?.toLowerCase() === selectedTab.toLowerCase();
+    return cocokSearch && cocokKategori;
   });
 
   return (
@@ -85,10 +68,13 @@ export default function RiwayatScreen({ navigation }) {
       {/* HEADER */}
       <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
         <View style={styles.headerTop}>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Ionicons name="arrow-back" size={22} color="#fff" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Riwayat</Text>
+          <View style={styles.leftGroup}>
+            <TouchableOpacity onPress={() => navigation.goBack()}>
+              <Ionicons name="arrow-back" size={22} color="#fff" />
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>Riwayat</Text>
+          </View>
+
           <TouchableOpacity onPress={() => setFilterVisible(true)}>
             <Ionicons name="filter-outline" size={22} color="#fff" />
           </TouchableOpacity>
@@ -149,34 +135,51 @@ export default function RiwayatScreen({ navigation }) {
       </LinearGradient>
 
       {/* LIST RIWAYAT */}
-      <ScrollView style={styles.listContainer} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.listContainer}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 140 }}
+      >
         {filteredData.length > 0 ? (
           filteredData.map((item) => (
             <View key={item.id} style={styles.card}>
-              <Image source={{ uri: item.gambar }} style={styles.image} />
+              <Image
+                source={{
+                  uri:
+                    "https://cdn-icons-png.flaticon.com/512/1046/1046784.png",
+                }}
+                style={styles.image}
+              />
               <View style={styles.cardContent}>
-                <Text style={styles.itemName}>{item.nama}</Text>
-                <Text style={styles.itemPrice}>{item.harga}</Text>
-                <Text style={styles.itemDate}>{item.tanggal}</Text>
+                <Text style={styles.itemName}>{item.name_commodity}</Text>
+                <Text style={styles.itemPrice}>Rp {item.price}</Text>
+                <Text style={styles.itemDate}>{formatDate(item.tanggal)}</Text>
               </View>
-              <View style={styles.iconRight}>{getStatusIcon(item.status)}</View>
+              <View style={styles.iconRight}>
+                <Text style={[styles.statusText, { color: "#EF4444" }]}>
+                  Hapus
+                </Text>
+              </View>
             </View>
           ))
         ) : (
           <Text style={{ textAlign: "center", marginTop: 20, color: "#6B7280" }}>
-            Tidak ada data ditemukan
+            Tidak ada riwayat hapus
           </Text>
         )}
       </ScrollView>
 
-      {/* MODAL FILTER STATUS */}
+      {/* MODAL FILTER */}
       <Modal
         visible={filterVisible}
         transparent
         animationType="fade"
         onRequestClose={() => setFilterVisible(false)}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setFilterVisible(false)}>
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setFilterVisible(false)}
+        >
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Filter Riwayat</Text>
             {["Semua", "upload", "edit", "hapus"].map((status) => (
@@ -207,7 +210,6 @@ export default function RiwayatScreen({ navigation }) {
         </Pressable>
       </Modal>
 
-      {/* DATE PICKER */}
       {datePickerVisible && (
         <DateTimePicker
           value={selectedDate}
@@ -226,24 +228,30 @@ export default function RiwayatScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },
   header: {
-    paddingTop: 50,
+    paddingTop: 48,
     paddingHorizontal: 16,
-    paddingBottom: 16,
+    paddingBottom: 12,
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
   },
   headerTop: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
+    justifyContent: "space-between",
   },
-  headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
+  leftGroup: { flexDirection: "row", alignItems: "center" },
+  headerTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+    marginLeft: 24,
+  },
   searchContainer: {
     flexDirection: "row",
     backgroundColor: "#fff",
     alignItems: "center",
     borderRadius: 10,
-    marginTop: 10,
+    marginTop: 12,
     paddingHorizontal: 10,
     height: 40,
   },
@@ -294,7 +302,7 @@ const styles = StyleSheet.create({
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "600" },
   itemDate: { fontSize: 12, color: "#6B7280" },
   iconRight: { marginLeft: 8 },
-  // MODAL FILTER
+  statusText: { fontWeight: "700", fontSize: 13 },
   modalOverlay: {
     flex: 1,
     justifyContent: "flex-end",
@@ -306,7 +314,12 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
   },
-  modalTitle: { fontSize: 16, fontWeight: "700", marginBottom: 10, color: "#174A6A" },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: 10,
+    color: "#174A6A",
+  },
   filterOption: {
     paddingVertical: 10,
     paddingHorizontal: 12,

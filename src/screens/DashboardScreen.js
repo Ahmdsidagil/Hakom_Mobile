@@ -1,3 +1,4 @@
+// DashboardScreen.js
 import React, { useEffect, useState } from "react";
 import {
   View,
@@ -6,121 +7,92 @@ import {
   StyleSheet,
   ScrollView,
   Image,
-  Alert,
-  ActivityIndicator,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import NetInfo from "@react-native-community/netinfo";
 
 import BottomNav from "../components/BottomNav";
 import { getDashboard } from "../../config/api";
 import {
   initDatabase,
   syncFromServer,
-  saveMarket,
-  debugTables,
+  syncPricesToServer,
+  getAllRiwayatPendataan,
 } from "../../config/database";
 
 export default function DashboardScreen({ navigation }) {
-  const [dashboardData, setDashboardData] = useState(null);
+  const [dashboardData, setDashboardData] = useState({ latest_prices: [] });
   const [greeting, setGreeting] = useState("");
-  const [loading, setLoading] = useState(true);
+
+  // helper untuk load riwayat
+  const loadRiwayatPendataan = async () => {
+    const riwayatData = await getAllRiwayatPendataan();
+
+    // urutkan descending berdasarkan tanggal/created_at
+    const sorted = riwayatData?.sort((a, b) => {
+      const dateA = new Date(a.tanggal || a.created_at);
+      const dateB = new Date(b.tanggal || b.created_at);
+      return dateB - dateA; // terbaru di atas
+    });
+
+    setDashboardData((prev) => ({
+      ...prev,
+      latest_prices: sorted?.slice(0, 10) || [], // ambil 10 data terbaru
+    }));
+  };
 
   useEffect(() => {
     const setup = async () => {
-      try {
-        // 🔹 1. Pastikan database lokal siap
-        console.log("🔄 Inisialisasi database lokal...");
-        await initDatabase();
+      await initDatabase();
+      await loadRiwayatPendataan();
 
-
-        // 🔹 2. Ambil token user
-        const token = await AsyncStorage.getItem("token");
-        if (!token) {
-          Alert.alert("Kesalahan", "Token tidak ditemukan. Silakan login ulang.");
-          navigation.replace("Login");
-          return;
-        }
-        
-
-        // 🔹 3. Sinkronisasi kategori & komoditas dari server
-        console.log("🔄 Sinkronisasi data master...");
-        await syncFromServer();
-
-        // 🔹 4. Ambil data dashboard
-        console.log("📡 Mengambil data dashboard...");
-        const data = await getDashboard(token);
-
-        if (data && data.success) {
-          setDashboardData(data);
-
-          // 🔹 5. Simpan data pasar user ke database lokal
-          if (data.market) {
-            await saveMarket(data.market);
-            console.log("✅ Data pasar berhasil disimpan ke SQLite");
+      // ambil info user & pasar dari server (jika online)
+      const token = await AsyncStorage.getItem("token");
+      if (token) {
+        try {
+          const state = await NetInfo.fetch();
+          if (state.isConnected) {
+            await syncFromServer();
+            await syncPricesToServer();
           }
-        } else {
-          console.warn("⚠️ Data dashboard tidak valid:", data);
-        }
 
-        // 🔹 6. Atur salam sesuai waktu
-        const hour = new Date().getHours();
-        if (hour >= 4 && hour < 11) setGreeting("Selamat Pagi");
-        else if (hour >= 11 && hour < 15) setGreeting("Selamat Siang");
-        else if (hour >= 15 && hour < 18) setGreeting("Selamat Sore");
-        else setGreeting("Selamat Malam");
-      } catch (err) {
-        console.error("❌ Gagal memuat dashboard:", err);
-        Alert.alert("Kesalahan", "Terjadi kesalahan saat memuat dashboard.");
-      } finally {
-        setLoading(false);
+          const data = await getDashboard(token);
+          if (data?.success) {
+            setDashboardData((prev) => ({
+              ...prev,
+              user_name: data.user_name,
+              market_name: data.market_name,
+              total_commodities: data.total_commodities,
+            }));
+          }
+        } catch (err) {
+          console.error("❌ Gagal fetch dashboard:", err);
+        }
       }
+
+      // greeting waktu
+      const hour = new Date().getHours();
+      if (hour >= 4 && hour < 11) setGreeting("Selamat Pagi");
+      else if (hour >= 11 && hour < 15) setGreeting("Selamat Siang");
+      else if (hour >= 15 && hour < 18) setGreeting("Selamat Sore");
+      else setGreeting("Selamat Malam");
     };
 
     setup();
   }, []);
 
+  // Navigasi ke InputScreen
   const handleTambahData = () => {
-    navigation.navigate("Input");
+    navigation.navigate("Input", {
+      onAddPrice: async () => {
+        await loadRiwayatPendataan(); // refresh data setelah tambah
+      },
+    });
   };
 
-  const handleNotifikasi = () => {
-    navigation.navigate("Notification");
-  };
-
-  const dataKomoditas = [
-    {
-      id: 1,
-      nama: "Daging Ayam",
-      harga: "Rp. 15.000/Kg",
-      tanggal: "10 Okt 2025, 08.00 WIB",
-      gambar: "https://cdn-icons-png.flaticon.com/512/3069/3069179.png",
-    },
-    {
-      id: 2,
-      nama: "Daging Sapi",
-      harga: "Rp. 120.000/Kg",
-      tanggal: "10 Okt 2025, 08.30 WIB",
-      gambar: "https://cdn-icons-png.flaticon.com/512/1998/1998707.png",
-    },
-    {
-      id: 3,
-      nama: "Telur Ayam",
-      harga: "Rp. 28.000/Kg",
-      tanggal: "10 Okt 2025, 09.00 WIB",
-      gambar: "https://cdn-icons-png.flaticon.com/512/616/616408.png",
-    },
-  ];
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#174A6A" />
-        <Text style={{ marginTop: 10, color: "#174A6A" }}>Memuat data...</Text>
-      </View>
-    );
-  }
+  const handleNotifikasi = () => navigation.navigate("Notification");
 
   return (
     <View style={styles.container}>
@@ -130,7 +102,7 @@ export default function DashboardScreen({ navigation }) {
           <View>
             <Text style={styles.greeting}>{greeting}!</Text>
             <Text style={styles.name}>
-              {dashboardData?.user_name || "Nama Petugas Pasar"}
+              {dashboardData?.user_name || "Petugas Pasar"}
             </Text>
           </View>
           <TouchableOpacity onPress={handleNotifikasi}>
@@ -164,19 +136,44 @@ export default function DashboardScreen({ navigation }) {
 
         <Text style={styles.sectionTitle}>Pendataan Terakhir</Text>
         <ScrollView showsVerticalScrollIndicator={false}>
-          {dataKomoditas.map((item) => (
-            <View key={item.id} style={styles.cardItem}>
-              <Image source={{ uri: item.gambar }} style={styles.image} />
-              <View style={styles.textContainer}>
-                <Text style={styles.itemName}>{item.nama}</Text>
-                <Text style={styles.itemPrice}>{item.harga}</Text>
-                <Text style={styles.itemDate}>{item.tanggal}</Text>
+          {dashboardData?.latest_prices?.length > 0 ? (
+            dashboardData.latest_prices.map((item, idx) => (
+              <View key={idx} style={styles.cardItem}>
+                <Image
+                  source={{
+                    uri: "https://cdn-icons-png.flaticon.com/512/1998/1998707.png",
+                  }}
+                  style={styles.image}
+                />
+                <View style={styles.textContainer}>
+                  <Text style={styles.itemName}>
+                    {item.name_commodity || item.nama}
+                  </Text>
+                  <Text style={styles.itemPrice}>
+                    Rp {item.price?.toLocaleString("id-ID")}/{item.unit}
+                  </Text>
+                  <Text style={styles.itemDate}>
+                    {item.tanggal
+                      ? `${new Date(item.tanggal).toLocaleDateString("id-ID", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })}, ${new Date(item.tanggal).toLocaleTimeString("id-ID", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}`
+                      : "-"}
+                    </Text>
+                </View>
               </View>
-            </View>
-          ))}
+            ))
+          ) : (
+            <Text style={styles.emptyText}>Belum ada pendataan terakhir</Text>
+          )}
         </ScrollView>
       </View>
 
+      {/* Bottom Navigation */}
       <BottomNav navigation={navigation} active="Dashboard" />
     </View>
   );
@@ -245,10 +242,5 @@ const styles = StyleSheet.create({
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "600" },
   itemDate: { fontSize: 12, color: "#6B7280" },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#F3F4F6",
-  },
+  emptyText: { color: "#6B7280", textAlign: "center", marginTop: 20 },
 });

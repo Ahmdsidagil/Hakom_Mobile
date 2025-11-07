@@ -10,43 +10,16 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as SQLite from "expo-sqlite";
-import { updatePassword } from "../../config/api";
+import { updatePassword } from "../../config/api"; // pastikan fungsi ini benar
 
 export default function UbahKataSandiScreen({ navigation }) {
   const [sandiLama, setSandiLama] = useState("");
   const [sandiBaru, setSandiBaru] = useState("");
   const [konfirmasiSandi, setKonfirmasiSandi] = useState("");
 
-  // kontrol tampilan mata
   const [showLama, setShowLama] = useState(false);
   const [showBaru, setShowBaru] = useState(false);
   const [showKonfirmasi, setShowKonfirmasi] = useState(false);
-
-  // 🔹 Simpan password ke database lokal SQLite
-  const savePasswordLocal = async (newPassword) => {
-    try {
-      const db = await SQLite.openDatabaseAsync("app_data.db");
-
-      // Buat tabel jika belum ada
-      await db.execAsync(`
-        CREATE TABLE IF NOT EXISTS user_local (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          password TEXT
-        );
-      `);
-
-      // Hapus data lama, lalu simpan password baru
-      await db.runAsync("DELETE FROM user_local;");
-      await db.runAsync("INSERT INTO user_local (password) VALUES (?);", [
-        newPassword,
-      ]);
-
-      console.log("✅ Password lokal berhasil disimpan");
-    } catch (err) {
-      console.error("❌ Gagal simpan password lokal:", err);
-    }
-  };
 
   // 🔹 Saat user menekan tombol "Simpan"
   const handleSimpan = async () => {
@@ -67,11 +40,10 @@ export default function UbahKataSandiScreen({ navigation }) {
         return;
       }
 
+      // 🔹 Panggil API ke server
       const res = await updatePassword(token, sandiLama, sandiBaru);
 
       if (res && res.success) {
-        await savePasswordLocal(sandiBaru); // simpan ke database lokal
-
         Alert.alert("Berhasil", "Kata sandi berhasil diubah!", [
           { text: "OK", onPress: () => navigation.goBack() },
         ]);
@@ -80,7 +52,7 @@ export default function UbahKataSandiScreen({ navigation }) {
       }
     } catch (err) {
       console.error("❌ Error ubah sandi:", err);
-      Alert.alert("Error", "Terjadi kesalahan. Coba lagi nanti.");
+      Alert.alert("Error", "Terjadi kesalahan saat mengubah sandi.");
     }
   };
 
@@ -99,7 +71,7 @@ export default function UbahKataSandiScreen({ navigation }) {
 
       {/* Body */}
       <View style={styles.body}>
-        {/* Input sandi lama */}
+        {/* Sandi lama */}
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Masukkan Sandi Lama</Text>
           <View style={styles.inputWrapper}>
@@ -119,7 +91,7 @@ export default function UbahKataSandiScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Input sandi baru */}
+        {/* Sandi baru */}
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Masukkan Sandi Baru</Text>
           <View style={styles.inputWrapper}>
@@ -139,7 +111,7 @@ export default function UbahKataSandiScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Konfirmasi sandi */}
+        {/* Konfirmasi sandi baru */}
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Konfirmasi Sandi Baru</Text>
           <View style={styles.inputWrapper}>
@@ -170,7 +142,6 @@ export default function UbahKataSandiScreen({ navigation }) {
   );
 }
 
-// 🎨 STYLE
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F3F4F6" },
   header: { paddingTop: 40, paddingBottom: 20, paddingHorizontal: 20 },

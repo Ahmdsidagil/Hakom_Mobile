@@ -2,6 +2,11 @@ import React from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
+/**
+ * Bottom navigation untuk Dashboard, Data Lokal, dan Profil
+ * @param {object} navigation - prop dari React Navigation
+ * @param {string} active - screen yang aktif saat ini
+ */
 export default function BottomNav({ navigation, active }) {
   return (
     <View style={styles.bottomNav}>
@@ -34,7 +39,7 @@ export default function BottomNav({ navigation, active }) {
         style={styles.navItem}
         onPress={() => {
           if (active !== "DataLocal") {
-            navigation.replace("DataLocal"); // 🚀 tanpa animasi
+            navigation.replace("DataLocal");
           }
         }}
       >

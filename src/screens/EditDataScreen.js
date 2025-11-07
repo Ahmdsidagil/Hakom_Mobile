@@ -40,7 +40,7 @@ export default function EditDataScreen({ route, navigation }) {
     setTimeout(() => {
       setShowSuccessPopup(false);
       navigation.goBack();
-    }, 2000);
+    }, 1500);
   };
 
   return (
@@ -98,27 +98,6 @@ export default function EditDataScreen({ route, navigation }) {
           </View>
         </View>
 
-        <Text style={styles.label}>Nama Pasar</Text>
-        <TextInput
-          style={[styles.input, styles.disabledInput]}
-          value={item.pasar || "Ngadiprono"}
-          editable={false}
-        />
-
-        <Text style={styles.label}>Alamat Pasar</Text>
-        <TextInput
-          style={[styles.input, styles.disabledInput]}
-          value={item.alamat || "Yogyakarta"}
-          editable={false}
-        />
-
-        <Text style={styles.label}>Tanggal Update</Text>
-        <TextInput
-          style={[styles.input, styles.disabledInput]}
-          value={item.tanggal}
-          editable={false}
-        />
-
         <TouchableOpacity style={styles.button} onPress={handleSave}>
           <Text style={styles.buttonText}>Simpan Perubahan</Text>
         </TouchableOpacity>
@@ -158,22 +137,23 @@ export default function EditDataScreen({ route, navigation }) {
 }
 
 const styles = StyleSheet.create({
-  header: {
+ header: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#174A6A",
-    paddingVertical: 16,
-    paddingHorizontal: 22,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
   },
   backButton: {
-    marginTop: 20,
-    marginRight: 24,
+    padding: 8,
+    marginTop: 24,
+    marginRight: 12,
   },
   headerTitle: {
     color: "#fff",
     fontSize: 18,
     fontWeight: "700",
-    marginTop: 20,
+    marginTop: 24,
   },
   container: {
     padding: 22,
