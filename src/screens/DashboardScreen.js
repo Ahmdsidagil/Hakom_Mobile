@@ -25,6 +25,7 @@ import {
 export default function DashboardScreen({ navigation }) {
   const [dashboardData, setDashboardData] = useState({ latest_prices: [] });
   const [greeting, setGreeting] = useState("");
+  const [isConnected, setIsConnected] = useState(true); // 🔹 indikator online/offline
 
   // Helper untuk load riwayat
   const loadRiwayatPendataan = async () => {
@@ -34,12 +35,12 @@ export default function DashboardScreen({ navigation }) {
     const sorted = riwayatData?.sort((a, b) => {
       const dateA = new Date(a.tanggal || a.created_at);
       const dateB = new Date(b.tanggal || b.created_at);
-      return dateB - dateA; // terbaru di atas
+      return dateB - dateA;
     });
 
     setDashboardData((prev) => ({
       ...prev,
-      latest_prices: sorted?.slice(0, 10) || [], // ambil 10 data terbaru
+      latest_prices: sorted?.slice(0, 10) || [],
     }));
   };
 
@@ -48,7 +49,12 @@ export default function DashboardScreen({ navigation }) {
       await initDatabase();
       await loadRiwayatPendataan();
 
-      // Ambil info user & pasar dari server (jika online)
+      // 🔹 Pantau status koneksi real-time
+      const unsubscribe = NetInfo.addEventListener((state) => {
+        setIsConnected(state.isConnected);
+      });
+
+      // 🔹 Ambil info user & pasar dari server (jika online)
       const token = await AsyncStorage.getItem("token");
       if (token) {
         try {
@@ -78,6 +84,8 @@ export default function DashboardScreen({ navigation }) {
       else if (hour >= 11 && hour < 15) setGreeting("Selamat Siang");
       else if (hour >= 15 && hour < 18) setGreeting("Selamat Sore");
       else setGreeting("Selamat Malam");
+
+      return () => unsubscribe(); // bersihkan listener
     };
 
     setup();
@@ -87,7 +95,7 @@ export default function DashboardScreen({ navigation }) {
   const handleTambahData = () => {
     navigation.navigate("Input", {
       onAddPrice: async () => {
-        await loadRiwayatPendataan(); // refresh data setelah tambah
+        await loadRiwayatPendataan();
       },
     });
   };
@@ -120,9 +128,23 @@ export default function DashboardScreen({ navigation }) {
               {dashboardData?.user_name || "Petugas Pasar"}
             </Text>
           </View>
-          <TouchableOpacity onPress={handleNotifikasi}>
-            <Ionicons name="notifications-outline" size={26} color="#fff" />
-          </TouchableOpacity>
+
+          {/* 🔹 Indikator + Notifikasi */}
+          <View style={styles.rightHeader}>
+            <View
+              style={[
+                styles.statusBadge,
+                { backgroundColor: isConnected ? "#10B981" : "#EF4444" },
+              ]}
+            >
+              <Text style={styles.statusText}>
+                {isConnected ? "Online" : "Offline"}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={handleNotifikasi} style={{ marginLeft: 12 }}>
+              <Ionicons name="notifications-outline" size={26} color="#fff" />
+            </TouchableOpacity>
+          </View>
         </View>
       </LinearGradient>
 
@@ -167,8 +189,9 @@ export default function DashboardScreen({ navigation }) {
                   <Text style={styles.itemPrice}>
                     Rp {item.price?.toLocaleString("id-ID")}/{item.unit}
                   </Text>
-                  <Text style={styles.itemDate}>{formatTanggalItem(item.tanggal)}</Text>
-                  {/* Tambahkan kategori */}
+                  <Text style={styles.itemDate}>
+                    {formatTanggalItem(item.tanggal)}
+                  </Text>
                   <Text style={styles.itemCategory}>
                     {item.name_category || item.kategori || "Lainnya"}
                   </Text>
@@ -195,6 +218,13 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
+  rightHeader: { flexDirection: "row", alignItems: "center" },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  statusText: { color: "#fff", fontSize: 12, fontWeight: "600" },
   greeting: { color: "#E0F2FE", fontSize: 16, fontWeight: "500" },
   name: { color: "#FFFFFF", fontSize: 18, fontWeight: "700" },
   body: {
@@ -250,6 +280,11 @@ const styles = StyleSheet.create({
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "600" },
   itemDate: { fontSize: 12, color: "#6B7280" },
-  itemCategory: { fontSize: 12, color: "#9CA3AF", marginTop: 2, fontStyle: "italic" },
+  itemCategory: {
+    fontSize: 12,
+    color: "#9CA3AF",
+    marginTop: 2,
+    fontStyle: "italic",
+  },
   emptyText: { color: "#6B7280", textAlign: "center", marginTop: 20 },
 });

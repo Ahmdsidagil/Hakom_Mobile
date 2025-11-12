@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from "react";
+// src/screens/RiwayatScreen.js
+import React, { useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,12 +10,17 @@ import {
   ScrollView,
   Modal,
   Pressable,
+  RefreshControl,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useFocusEffect } from "@react-navigation/native";
-import { getRiwayatHapus } from "../../config/database"; // ⬅️ pastikan path sesuai
+import {
+  getDatabase,
+  getAllRiwayatPendataan,
+  getRiwayatHapus,
+} from "../../config/database";
 
 export default function RiwayatScreen({ navigation }) {
   const [search, setSearch] = useState("");
@@ -23,44 +29,94 @@ export default function RiwayatScreen({ navigation }) {
   const [filterStatus, setFilterStatus] = useState("Semua");
   const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [dataRiwayat, setDataRiwayat] = useState([]); // ⬅️ sekarang ambil dari DB
+  const [dataRiwayat, setDataRiwayat] = useState([]);
+  const [kategori, setKategori] = useState(["Semua"]);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const kategori = ["Semua", "Sayuran", "Daging", "Ikan", "Buah", "Telur"];
+  // 🔹 Ambil kategori dari database lokal
+  const fetchCategories = async () => {
+    try {
+      const db = await getDatabase();
+      const categoriesResult = await db.getAllAsync?.("SELECT * FROM categories;");
+      const kategoriNames = categoriesResult.map((c) => c.name_category);
+      setKategori(["Semua", ...kategoriNames]);
+    } catch (error) {
+      console.error("❌ Gagal ambil kategori:", error);
+    }
+  };
 
-  // 🔹 Ambil data dari database setiap kali screen difokuskan
+  // 🔹 Ambil data riwayat yang sudah tersinkron
+  const fetchRiwayat = async () => {
+    try {
+      const riwayatPendataan = await getAllRiwayatPendataan();
+      const riwayatHapus = await getRiwayatHapus();
+
+      const dataGabungan = [
+        ...(riwayatPendataan || []).map((item) => ({
+          ...item,
+          status: "Sudah Tersinkron",
+        })),
+        ...(riwayatHapus || []).map((item) => ({
+          ...item,
+          status: "Hapus",
+        })),
+      ];
+
+      // Urutkan berdasarkan tanggal terbaru
+      dataGabungan.sort((a, b) => new Date(b.tanggal) - new Date(a.tanggal));
+      setDataRiwayat(dataGabungan);
+    } catch (error) {
+      console.error("❌ Gagal ambil data riwayat:", error);
+    }
+  };
+
+  // 🔁 Refresh handler
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchRiwayat();
+    setRefreshing(false);
+  }, []);
+
+  // 🔹 Load data saat screen fokus
   useFocusEffect(
     useCallback(() => {
-      const fetchRiwayat = async () => {
-        const data = await getRiwayatHapus();
-        console.log("📦 Riwayat dari DB:", data);
-        setDataRiwayat(data);
-      };
+      fetchCategories();
       fetchRiwayat();
     }, [])
   );
 
-  // 🔹 Format tanggal biar rapi
-  const formatDate = (tgl) => {
-    try {
-      return new Date(tgl).toLocaleDateString("id-ID", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      });
-    } catch {
-      return tgl;
-    }
+  // 🔹 Format tanggal tampilan
+  const formatTanggalItem = (tgl) => {
+    if (!tgl) return "-";
+    const dateObj = new Date(tgl);
+    if (isNaN(dateObj.getTime())) return "-";
+    return `${dateObj.toLocaleDateString("id-ID", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    })}, ${dateObj.toLocaleTimeString("id-ID", {
+      hour: "2-digit",
+      minute: "2-digit",
+    })}`;
   };
 
-  // 🔹 Filter data berdasarkan search, kategori, dan tanggal
+  // 🔹 Format harga rupiah
+  const formatHarga = (harga) => {
+    if (!harga) return "-";
+    const num = typeof harga === "string" ? parseInt(harga) : harga;
+    return `Rp ${num.toLocaleString("id-ID")}`;
+  };
+
+  // 🔹 Filter data berdasarkan kategori, status, dan pencarian
   const filteredData = dataRiwayat.filter((item) => {
-    const cocokSearch =
-      item.name_commodity?.toLowerCase().includes(search.toLowerCase()) ?? false;
-    const cocokKategori =
-      selectedTab === "Semua"
-        ? true
-        : item.name_category?.toLowerCase() === selectedTab.toLowerCase();
-    return cocokSearch && cocokKategori;
+    const matchSearch = item.name_commodity
+      ?.toLowerCase()
+      .includes(search.toLowerCase().trim());
+    const matchCategory =
+      selectedTab === "Semua" || item.name_category === selectedTab;
+    const matchStatus =
+      filterStatus === "Semua" || item.status === filterStatus;
+    return matchSearch && matchCategory && matchStatus;
   });
 
   return (
@@ -72,19 +128,18 @@ export default function RiwayatScreen({ navigation }) {
             <TouchableOpacity onPress={() => navigation.goBack()}>
               <Ionicons name="arrow-back" size={22} color="#fff" />
             </TouchableOpacity>
-            <Text style={styles.headerTitle}>Riwayat</Text>
+            <Text style={styles.headerTitle}>Riwayat Pendataan</Text>
           </View>
-
           <TouchableOpacity onPress={() => setFilterVisible(true)}>
             <Ionicons name="filter-outline" size={22} color="#fff" />
           </TouchableOpacity>
         </View>
 
-        {/* SEARCH */}
+        {/* Search */}
         <View style={styles.searchContainer}>
           <Ionicons name="search" size={18} color="#6B7280" />
           <TextInput
-            placeholder="Search"
+            placeholder="Cari komoditas..."
             value={search}
             onChangeText={setSearch}
             placeholderTextColor="#9CA3AF"
@@ -92,23 +147,29 @@ export default function RiwayatScreen({ navigation }) {
           />
         </View>
 
-        {/* FILTER ROW */}
+        {/* Filter Row */}
         <View style={styles.filterRow}>
           <TouchableOpacity
             style={styles.filterBox}
             onPress={() => setDatePickerVisible(true)}
           >
             <Ionicons name="calendar-outline" size={16} color="#174A6A" />
-            <Text style={styles.filterText}>{formatDate(selectedDate)}</Text>
+            <Text style={styles.filterText}>
+              {selectedDate.toLocaleDateString("id-ID", {
+                day: "numeric",
+                month: "short",
+                year: "numeric",
+              })}
+            </Text>
           </TouchableOpacity>
 
           <View style={styles.filterBox}>
             <Ionicons name="cube-outline" size={16} color="#174A6A" />
-            <Text style={styles.filterText}>Total : {filteredData.length}</Text>
+            <Text style={styles.filterText}>Total: {filteredData.length}</Text>
           </View>
         </View>
 
-        {/* TAB KATEGORI */}
+        {/* Tab Kategori Dinamis */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View style={styles.tabRow}>
             {kategori.map((item) => (
@@ -137,39 +198,64 @@ export default function RiwayatScreen({ navigation }) {
       {/* LIST RIWAYAT */}
       <ScrollView
         style={styles.listContainer}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 140 }}
+        contentContainerStyle={{ paddingBottom: 160 }}
       >
         {filteredData.length > 0 ? (
           filteredData.map((item) => (
-            <View key={item.id} style={styles.card}>
+            <View key={`${item.id}-${item.status}`} style={styles.card}>
               <Image
                 source={{
-                  uri:
-                    "https://cdn-icons-png.flaticon.com/512/1046/1046784.png",
+                  uri: "https://cdn-icons-png.flaticon.com/512/415/415682.png",
                 }}
                 style={styles.image}
               />
               <View style={styles.cardContent}>
-                <Text style={styles.itemName}>{item.name_commodity}</Text>
-                <Text style={styles.itemPrice}>Rp {item.price}</Text>
-                <Text style={styles.itemDate}>{formatDate(item.tanggal)}</Text>
+                <Text style={styles.itemName}>{item.name_commodity || "-"}</Text>
+                <Text style={styles.itemPrice}>
+                  {formatHarga(item.price)} / {item.unit || "-"}
+                </Text>
+                <Text style={styles.itemDate}>
+                  {formatTanggalItem(item.tanggal)}
+                </Text>
+                <Text style={styles.itemCategory}>
+                  {item.name_category || "Lainnya"}
+                </Text>
               </View>
               <View style={styles.iconRight}>
-                <Text style={[styles.statusText, { color: "#EF4444" }]}>
-                  Hapus
+                <Text
+                  style={[
+                    styles.statusText,
+                    {
+                      color:
+                        item.status === "Sudah Tersinkron"
+                          ? "#22C55E"
+                          : "#EF4444",
+                    },
+                  ]}
+                >
+                  {item.status}
                 </Text>
               </View>
             </View>
           ))
         ) : (
-          <Text style={{ textAlign: "center", marginTop: 20, color: "#6B7280" }}>
-            Tidak ada riwayat hapus
+          <Text
+            style={{
+              textAlign: "center",
+              marginTop: 40,
+              color: "#6B7280",
+            }}
+          >
+            Tidak ada riwayat ditemukan
           </Text>
         )}
       </ScrollView>
 
-      {/* MODAL FILTER */}
+      {/* Modal Filter */}
       <Modal
         visible={filterVisible}
         transparent
@@ -182,7 +268,7 @@ export default function RiwayatScreen({ navigation }) {
         >
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Filter Riwayat</Text>
-            {["Semua", "upload", "edit", "hapus"].map((status) => (
+            {["Semua", "Sudah Tersinkron", "Hapus"].map((status) => (
               <TouchableOpacity
                 key={status}
                 style={[
@@ -200,9 +286,7 @@ export default function RiwayatScreen({ navigation }) {
                     filterStatus === status && { color: "#fff" },
                   ]}
                 >
-                  {status === "upload"
-                    ? "Sinkron"
-                    : status.charAt(0).toUpperCase() + status.slice(1)}
+                  {status}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -210,6 +294,7 @@ export default function RiwayatScreen({ navigation }) {
         </Pressable>
       </Modal>
 
+      {/* Date Picker */}
       {datePickerVisible && (
         <DateTimePicker
           value={selectedDate}
@@ -228,9 +313,9 @@ export default function RiwayatScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },
   header: {
-    paddingTop: 48,
+    paddingTop: 50,
     paddingHorizontal: 16,
-    paddingBottom: 12,
+    paddingBottom: 16,
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
   },
@@ -251,7 +336,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     alignItems: "center",
     borderRadius: 10,
-    marginTop: 12,
+    marginTop: 10,
     paddingHorizontal: 10,
     height: 40,
   },
@@ -290,10 +375,10 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginBottom: 12,
     padding: 10,
+    elevation: 1,
     shadowColor: "#000",
     shadowOpacity: 0.05,
     shadowRadius: 3,
-    elevation: 1,
     alignItems: "center",
   },
   image: { width: 60, height: 60, borderRadius: 8, marginRight: 10 },
@@ -301,6 +386,12 @@ const styles = StyleSheet.create({
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "600" },
   itemDate: { fontSize: 12, color: "#6B7280" },
+  itemCategory: {
+    fontSize: 12,
+    color: "#9CA3AF",
+    marginTop: 2,
+    fontStyle: "italic",
+  },
   iconRight: { marginLeft: 8 },
   statusText: { fontWeight: "700", fontSize: 13 },
   modalOverlay: {

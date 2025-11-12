@@ -32,7 +32,6 @@ export default function InputScreen({ navigation, route }) {
   const [searchKomoditas, setSearchKomoditas] = useState("");
 
   const [loading, setLoading] = useState(false);
-
   const [snackbarMessage, setSnackbarMessage] = useState("");
   const [snackbarAnim] = useState(new Animated.Value(0));
 
@@ -66,7 +65,7 @@ export default function InputScreen({ navigation, route }) {
           toValue: 0,
           duration: 300,
           useNativeDriver: true,
-        }).start();
+        }).start(() => setSnackbarMessage(""));
       }, 1500);
     });
   };
@@ -95,13 +94,11 @@ export default function InputScreen({ navigation, route }) {
 
   const handleToggleSelectAllCategories = () => {
     if (selectedCategories.length === categories.length) {
-      // Jika semua sudah dipilih → batal pilih semua
       setSelectedCategories([]);
       setFilteredCommodities([]);
       setSelectedCommodity(null);
       setUnit("");
     } else {
-      // Pilih semua
       setSelectedCategories([...categories]);
       setFilteredCommodities([...commodities]);
     }
@@ -149,7 +146,6 @@ export default function InputScreen({ navigation, route }) {
           "Peringatan",
           "Komoditas yang dipilih tidak sesuai kategori yang dipilih!"
         );
-        setLoading(false);
         return;
       }
 
@@ -163,10 +159,9 @@ export default function InputScreen({ navigation, route }) {
         );
       }
 
-      // Snackbar notification
       showSnackbar("✅ Data harga berhasil disimpan");
 
-      // Reset harga & komoditas tapi **kategori tetap dipilih**
+      // Reset harga & komoditas tapi kategori tetap
       setPrice("");
       setSelectedCommodity(null);
       setUnit("");
@@ -178,6 +173,7 @@ export default function InputScreen({ navigation, route }) {
       console.error("❌ Gagal menyimpan data:", error);
       showSnackbar("❌ Terjadi kesalahan saat menyimpan data");
     } finally {
+      console.log("✅ Selesai simpan (reset loading)");
       setLoading(false);
     }
   };
@@ -271,8 +267,13 @@ export default function InputScreen({ navigation, route }) {
         </TouchableOpacity>
       </ScrollView>
 
-      {/* Modal Pilih Kategori */}
-      <Modal visible={modalKategoriVisible} transparent animationType="fade">
+      {/* Modal Kategori */}
+      <Modal
+        visible={modalKategoriVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setModalKategoriVisible(false)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <Text style={styles.modalTitle}>Pilih Kategori</Text>
@@ -287,7 +288,9 @@ export default function InputScreen({ navigation, route }) {
               onPress={handleToggleSelectAllCategories}
             >
               <Text style={styles.selectAllText}>
-                {selectedCategories.length === categories.length ? "Batal Pilih Semua" : "Pilih Semua"}
+                {selectedCategories.length === categories.length
+                  ? "Batal Pilih Semua"
+                  : "Pilih Semua"}
               </Text>
             </TouchableOpacity>
             <ScrollView style={{ maxHeight: 300 }}>
@@ -307,14 +310,19 @@ export default function InputScreen({ navigation, route }) {
               })}
             </ScrollView>
             <TouchableOpacity onPress={() => setModalKategoriVisible(false)} style={styles.closeButton}>
-              <Text style={styles.closeText}>Tutup</Text>
+              <Text style={styles.closeText}>Selesai</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Modal Pilih Komoditas */}
-      <Modal visible={modalKomoditasVisible} transparent animationType="fade">
+      {/* Modal Komoditas */}
+      <Modal
+        visible={modalKomoditasVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setModalKomoditasVisible(false)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalBox}>
             <Text style={styles.modalTitle}>Pilih Komoditas</Text>
@@ -330,7 +338,6 @@ export default function InputScreen({ navigation, route }) {
                   .filter((cat) => cat.id === item.category_id)
                   .map((cat) => cat.name_category)
                   .join(", ");
-
                 return (
                   <TouchableOpacity
                     key={item.id}
@@ -401,6 +408,17 @@ const styles = StyleSheet.create({
   closeText: { color: "#174A6A", fontWeight: "600" },
   selectAllButton: { paddingVertical: 10, backgroundColor: "#E0F2FE", borderRadius: 8, alignItems: "center", marginBottom: 8 },
   selectAllText: { fontWeight: "600", color: "#174A6A" },
-  snackbar: { position: "absolute", bottom: 30, left: 20, right: 20, backgroundColor: "#16A34A", padding: 12, borderRadius: 10, alignItems: "center" },
+  snackbar: {
+    position: "absolute",
+    bottom: 30,
+    left: 20,
+    right: 20,
+    backgroundColor: "#16A34A",
+    padding: 12,
+    borderRadius: 10,
+    alignItems: "center",
+    zIndex: 999,
+    elevation: 10,
+  },
   snackbarText: { color: "#fff", fontWeight: "600" },
 });

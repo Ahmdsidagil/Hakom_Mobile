@@ -6,7 +6,8 @@ export default {
   LOGIN: `${BASE_URL}/users/login`,
   CATEGORIES: `${BASE_URL}/categories`,
   COMMODITIES: `${BASE_URL}/commodities`,
-  ADD_PRICE: `${BASE_URL}/prices/add`,
+  ADD_PRICE: `${BASE_URL}/sync/price`,
+  SYNC_PRICES: `${BASE_URL}/sync`,
   UPDATE_PASSWORD: `${BASE_URL}/users/update-password`,
   GET_MARKET: `${BASE_URL}/markets`, // 🔑 endpoint ubah kata sandi
 };

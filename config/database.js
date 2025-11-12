@@ -1,4 +1,6 @@
-// config/database.js
+// ====================================
+// 📦 config/database.js (versi final dipoles)
+// ====================================
 import * as SQLite from "expo-sqlite";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
@@ -10,9 +12,9 @@ let db;
 // 🔹 Inisialisasi Database
 // ====================================
 export const initDatabase = async () => {
-  if (!db) db = SQLite.openDatabaseAsync("local_market.db");
+  if (!db) db = SQLite.openDatabaseSync("local_market.db");
 
-  // Tabel kategori
+  // Buat tabel
   await db.execAsync?.(`
     CREATE TABLE IF NOT EXISTS categories (
       id INTEGER PRIMARY KEY,
@@ -20,7 +22,6 @@ export const initDatabase = async () => {
     );
   `);
 
-  // Tabel komoditas
   await db.execAsync?.(`
     CREATE TABLE IF NOT EXISTS commodities (
       id INTEGER PRIMARY KEY,
@@ -31,7 +32,6 @@ export const initDatabase = async () => {
     );
   `);
 
-  // Tabel pasar
   await db.execAsync?.(`
     CREATE TABLE IF NOT EXISTS markets (
       id INTEGER PRIMARY KEY,
@@ -40,7 +40,6 @@ export const initDatabase = async () => {
     );
   `);
 
-  // Tabel harga lokal
   await db.execAsync?.(`
     CREATE TABLE IF NOT EXISTS local_prices (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +56,6 @@ export const initDatabase = async () => {
     );
   `);
 
-  // Tabel riwayat hapus
   await db.execAsync?.(`
     CREATE TABLE IF NOT EXISTS riwayat_hapus (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,7 +67,6 @@ export const initDatabase = async () => {
     );
   `);
 
-  // Tabel riwayat pendataan
   await db.execAsync?.(`
     CREATE TABLE IF NOT EXISTS riwayat_pendataan (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +79,14 @@ export const initDatabase = async () => {
   `);
 
   console.log("✅ Database & tabel lokal siap digunakan");
+
+  // 🔄 Sinkron otomatis ketika online
+  NetInfo.addEventListener((state) => {
+    if (state.isConnected) {
+      console.log("🌐 Koneksi aktif kembali — mulai sinkronisasi otomatis...");
+      syncPricesToServer();
+    }
+  });
 };
 
 // ====================================
@@ -157,39 +162,7 @@ export const addPrice = async (commodityId, categoryId, price, unit) => {
     const state = await NetInfo.fetch();
     const isOnline = state.isConnected;
     const token = await AsyncStorage.getItem("token");
-
     const now = new Date().toISOString();
-
-    let serverSent = false;
-    if (isOnline && token) {
-      try {
-        const res = await fetch(api.ADD_PRICE, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            commodity_id: commodityId,
-            category_id: categoryId,
-            price,
-            unit,
-            tanggal: now,
-          }),
-        });
-        if (res.ok) serverSent = true;
-      } catch (err) {
-        console.warn("⚠️ Gagal kirim ke server:", err);
-      }
-    }
-
-    if (!serverSent) {
-      await db.runAsync?.(
-        `INSERT INTO local_prices (commodity_id, category_id, price, unit, created_at)
-         VALUES (?, ?, ?, ?, ?);`,
-        [commodityId, categoryId, price, unit, now]
-      );
-    }
 
     const commodity = await db.getFirstAsync?.(
       `SELECT name_commodity FROM commodities WHERE id = ?;`,
@@ -200,6 +173,44 @@ export const addPrice = async (commodityId, categoryId, price, unit) => {
       [categoryId]
     );
 
+    // Jika online, kirim langsung ke server
+    if (isOnline && token) {
+      try {
+        const res = await fetch(api.ADD_PRICE, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ commodity_id: commodityId, price }),
+        });
+
+        if (res.ok) {
+          // ✅ Tambahkan langsung ke riwayat pendataan
+          await addRiwayatPendataan({
+            name_commodity: commodity?.name_commodity || `Komoditas ${commodityId}`,
+            price,
+            unit: unit || "-",
+            name_category: category?.name_category || "-",
+            tanggal: now,
+          });
+
+          console.log("✅ Data online tersimpan & langsung ke riwayat");
+          return;
+        }
+      } catch (err) {
+        console.warn("⚠️ Gagal kirim ke server:", err);
+      }
+    }
+
+    // Kalau offline → simpan ke lokal & tetap masuk riwayat
+    await db.runAsync?.(
+      `INSERT INTO local_prices (commodity_id, category_id, price, unit, created_at, synced)
+       VALUES (?, ?, ?, ?, ?, 0);`,
+      [commodityId, categoryId, price, unit, now]
+    );
+
+    // Tambahkan juga ke riwayat pendataan (agar tampil di UI)
     await addRiwayatPendataan({
       name_commodity: commodity?.name_commodity || `Komoditas ${commodityId}`,
       price,
@@ -207,6 +218,8 @@ export const addPrice = async (commodityId, categoryId, price, unit) => {
       name_category: category?.name_category || "-",
       tanggal: now,
     });
+
+    console.log("📦 Data offline disimpan & tampil di riwayat (belum sinkron)");
   } catch (error) {
     console.error("❌ Gagal menambahkan harga:", error);
   }
@@ -222,10 +235,11 @@ export const syncPricesToServer = async () => {
     if (!token) throw new Error("Token tidak ditemukan");
 
     const unsynced = await db.getAllAsync?.(`SELECT * FROM local_prices WHERE synced = 0;`);
+    if (!unsynced?.length) return console.log("✅ Tidak ada data lokal yang perlu disinkron");
 
     for (const item of unsynced) {
       try {
-        const res = await fetch(api.ADD_PRICE, {
+        const res = await fetch(api.SYNC_PRICES, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
@@ -233,13 +247,13 @@ export const syncPricesToServer = async () => {
           },
           body: JSON.stringify({
             commodity_id: item.commodity_id,
-            category_id: item.category_id,
             price: item.price,
-            unit: item.unit,
           }),
         });
+
         if (res.ok) {
           await db.runAsync?.(`UPDATE local_prices SET synced = 1 WHERE id = ?;`, [item.id]);
+          console.log(`✅ Data lokal ID ${item.id} tersinkron ke server`);
         }
       } catch (err) {
         console.warn("⚠️ Gagal sinkron item ID", item.id, err);
