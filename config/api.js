@@ -1,21 +1,21 @@
 // config/api.js
-const BASE_URL = "http://103.100.27.57:5000/api"; // ganti IP sesuai server kamu
+const BASE_URL = "http://103.100.27.57:5100/api"; // ganti IP sesuai server kamu
 
 export default {
   BASE_URL,
-  LOGIN: `${BASE_URL}/users/login`,
+  LOGIN: `${BASE_URL}/login-mobile`,
   CATEGORIES: `${BASE_URL}/categories`,
   COMMODITIES: `${BASE_URL}/commodities`,
   ADD_PRICE: `${BASE_URL}/sync/price`,
   SYNC_PRICES: `${BASE_URL}/sync`,
-  UPDATE_PASSWORD: `${BASE_URL}/users/update-password`,
-  GET_MARKET: `${BASE_URL}/markets`, // 🔑 endpoint ubah kata sandi
+  UPDATE_PASSWORD: `${BASE_URL}/change-password`,
+  GET_MARKET: `${BASE_URL}/markets`,
 };
 
 // Ambil data dashboard
-export const getDashboard = async (token) => {
+export const userInfo = async (token) => {
   try {
-    const response = await fetch(`${BASE_URL}/dashboard`, {
+    const response = await fetch(`${BASE_URL}/userinfo`, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -33,7 +33,7 @@ export const getDashboard = async (token) => {
 // 🔐 Fungsi ubah kata sandi
 export const updatePassword = async (token, oldPassword, newPassword) => {
   try {
-    const response = await fetch(`${BASE_URL}/users/change-password`, {
+    const response = await fetch(`${BASE_URL}/change-password`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",

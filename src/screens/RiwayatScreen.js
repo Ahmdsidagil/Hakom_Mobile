@@ -49,12 +49,11 @@ export default function RiwayatScreen({ navigation }) {
 
   const fetchRiwayat = async () => {
     try {
-      await syncDataToServer(false); // pastikan sinkronisasi berjalan
+      await syncDataToServer(false);
 
       const riwayatPendataan = await getAllRiwayatPendataan();
       const riwayatHapus = await getRiwayatHapus();
 
-      // Hanya tampilkan yang sudah tersinkron dan yang dihapus
       const formattedOnline = riwayatPendataan.map((item) => ({
         ...item,
         status: "Sudah Tersinkron",
@@ -66,16 +65,14 @@ export default function RiwayatScreen({ navigation }) {
 
       const combined = [...formattedOnline, ...formattedHapus];
 
-      // Hapus duplikat berdasarkan commodity_id + tanggal/created_at
       const uniqueMap = new Map();
       combined.forEach((item) => {
         const key =
           (item.commodity_id || item.name_commodity || "unknown") +
           "_" +
           (item.tanggal || item.created_at || "unknown");
-        if (!uniqueMap.has(key)) {
-          uniqueMap.set(key, item);
-        }
+
+        if (!uniqueMap.has(key)) uniqueMap.set(key, item);
       });
 
       const uniqueArray = Array.from(uniqueMap.values()).sort(
@@ -145,7 +142,7 @@ export default function RiwayatScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      {/* HEADER */}
       <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
         <View style={styles.headerTop}>
           <View style={styles.leftGroup}>
@@ -159,6 +156,7 @@ export default function RiwayatScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
+        {/* Search */}
         <View style={styles.searchContainer}>
           <Ionicons name="search" size={18} color="#6B7280" />
           <TextInput
@@ -170,6 +168,7 @@ export default function RiwayatScreen({ navigation }) {
           />
         </View>
 
+        {/* Filter Row */}
         <View style={styles.filterRow}>
           <TouchableOpacity
             style={styles.filterBox}
@@ -191,6 +190,7 @@ export default function RiwayatScreen({ navigation }) {
           </View>
         </View>
 
+        {/* Tabs Kategori */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View style={styles.tabRow}>
             {kategori.map((item, index) => (
@@ -199,7 +199,12 @@ export default function RiwayatScreen({ navigation }) {
                 style={[styles.tabItem, selectedTab === item && styles.tabActive]}
                 onPress={() => setSelectedTab(item)}
               >
-                <Text style={[styles.tabText, selectedTab === item && styles.tabTextActive]}>
+                <Text
+                  style={[
+                    styles.tabText,
+                    selectedTab === item && styles.tabTextActive,
+                  ]}
+                >
                   {item}
                 </Text>
               </TouchableOpacity>
@@ -208,7 +213,7 @@ export default function RiwayatScreen({ navigation }) {
         </ScrollView>
       </LinearGradient>
 
-      {/* Daftar Riwayat */}
+      {/* LIST RIWAYAT */}
       <ScrollView
         style={styles.listContainer}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
@@ -218,14 +223,20 @@ export default function RiwayatScreen({ navigation }) {
         {filteredData.length > 0 ? (
           filteredData.map((item, idx) => (
             <View
-              key={`${item.commodity_id || item.name_commodity}-${item.tanggal || item.created_at}-${item.status}-${idx}`}
+              key={`${item.commodity_id || item.name_commodity}-${idx}`}
               style={styles.card}
             >
+              {/* GAMBAR */}
               <Image
-                source={{ uri: "https://cdn-icons-png.flaticon.com/512/415/415682.png" }}
+                source={{
+                  uri: "https://cdn-icons-png.flaticon.com/512/415/415682.png",
+                }}
                 style={styles.image}
+                resizeMode="contain"
               />
-              <View style={styles.cardContent}>
+
+              {/* KONTEN KIRI */}
+              <View style={styles.cardLeft}>
                 <Text style={styles.itemName}>{item.name_commodity || "-"}</Text>
                 <Text style={styles.itemPrice}>
                   {formatHarga(item.price)} / {item.unit || "-"}
@@ -233,10 +244,20 @@ export default function RiwayatScreen({ navigation }) {
                 <Text style={styles.itemDate}>
                   {formatTanggalItem(item.tanggal || item.created_at)}
                 </Text>
-                <Text style={styles.itemCategory}>{item.name_category || "Lainnya"}</Text>
               </View>
-              <View style={styles.iconRight}>
-                <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
+
+              {/* KONTEN KANAN */}
+              <View style={styles.cardRight}>
+                <Text style={styles.itemCategory}>
+                  {item.name_category || "Lainnya"}
+                </Text>
+
+                <Text
+                  style={[
+                    styles.statusText,
+                    { color: getStatusColor(item.status) },
+                  ]}
+                >
                   {item.status}
                 </Text>
               </View>
@@ -250,34 +271,53 @@ export default function RiwayatScreen({ navigation }) {
       </ScrollView>
 
       {/* Modal Filter */}
-      <Modal visible={filterVisible} transparent animationType="fade" onRequestClose={() => setFilterVisible(false)}>
-        <Pressable style={styles.modalOverlay} onPress={() => setFilterVisible(false)}>
+      <Modal
+        visible={filterVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFilterVisible(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setFilterVisible(false)}
+        >
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Filter Riwayat</Text>
-            {["Semua", "Sudah Tersinkron", "Belum Sinkron", "Hapus"].map((status) => (
-              <TouchableOpacity
-                key={status}
-                style={[styles.filterOption, filterStatus === status && styles.filterOptionActive]}
-                onPress={() => {
-                  setFilterStatus(status);
-                  setFilterVisible(false);
-                }}
-              >
-                <Text style={[styles.filterOptionText, filterStatus === status && { color: "#fff" }]}>
-                  {status}
-                </Text>
-              </TouchableOpacity>
-            ))}
+
+            {["Semua", "Sudah Tersinkron", "Belum Sinkron", "Hapus"].map(
+              (status) => (
+                <TouchableOpacity
+                  key={status}
+                  style={[
+                    styles.filterOption,
+                    filterStatus === status && styles.filterOptionActive,
+                  ]}
+                  onPress={() => {
+                    setFilterStatus(status);
+                    setFilterVisible(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.filterOptionText,
+                      filterStatus === status && { color: "#fff" },
+                    ]}
+                  >
+                    {status}
+                  </Text>
+                </TouchableOpacity>
+              )
+            )}
           </View>
         </Pressable>
       </Modal>
 
-      {/* Picker Tanggal */}
+      {/* Date Picker */}
       {datePickerVisible && (
         <DateTimePicker
           value={selectedDate}
           mode="date"
-          display="calender"
+          display="calendar"
           onChange={(e, date) => {
             if (date) setSelectedDate(date);
             setDatePickerVisible(false);
@@ -288,36 +328,174 @@ export default function RiwayatScreen({ navigation }) {
   );
 }
 
+/* ========================== */
+/*          STYLES            */
+/* ========================== */
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },
-  header: { paddingTop: 50, paddingHorizontal: 16, paddingBottom: 16, borderBottomLeftRadius: 20, borderBottomRightRadius: 20 },
-  headerTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+
+  header: {
+    paddingTop: 50,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+  },
+
+  headerTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
   leftGroup: { flexDirection: "row", alignItems: "center" },
-  headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700", marginLeft: 24 },
-  searchContainer: { flexDirection: "row", backgroundColor: "#fff", alignItems: "center", borderRadius: 10, marginTop: 10, paddingHorizontal: 10, height: 40 },
+
+  headerTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+    marginLeft: 24,
+  },
+
+  searchContainer: {
+    flexDirection: "row",
+    backgroundColor: "#fff",
+    alignItems: "center",
+    borderRadius: 10,
+    marginTop: 10,
+    paddingHorizontal: 10,
+    height: 40,
+  },
+
   searchInput: { flex: 1, marginLeft: 6, color: "#111827" },
-  filterRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 12 },
-  filterBox: { flexDirection: "row", alignItems: "center", backgroundColor: "#E0F2FE", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+
+  filterRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 12,
+  },
+
+  filterBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#E0F2FE",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+
   filterText: { marginLeft: 5, color: "#174A6A", fontWeight: "600" },
-  tabRow: { flexDirection: "row", marginTop: 10, paddingBottom: 4 },
-  tabItem: { backgroundColor: "transparent", paddingVertical: 6, paddingHorizontal: 12, marginRight: 8, borderRadius: 20, borderWidth: 1, borderColor: "#fff" },
+
+  tabRow: {
+    flexDirection: "row",
+    marginTop: 10,
+    paddingBottom: 4,
+  },
+
+  tabItem: {
+    backgroundColor: "transparent",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    marginRight: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#fff",
+  },
+
   tabActive: { backgroundColor: "#fff" },
+
   tabText: { color: "#fff", fontWeight: "500" },
+
   tabTextActive: { color: "#174A6A", fontWeight: "700" },
+
   listContainer: { padding: 16 },
-  card: { flexDirection: "row", backgroundColor: "#fff", borderRadius: 10, marginBottom: 12, padding: 10, elevation: 1, alignItems: "center" },
-  image: { width: 60, height: 60, borderRadius: 8, marginRight: 10 },
-  cardContent: { flex: 1 },
-  itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
-  itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "600" },
-  itemDate: { fontSize: 12, color: "#6B7280" },
-  itemCategory: { fontSize: 12, color: "#9CA3AF", marginTop: 2, fontStyle: "italic" },
-  iconRight: { marginLeft: 8 },
-  statusText: { fontWeight: "700", fontSize: 13 },
-  modalOverlay: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.3)" },
-  modalContent: { backgroundColor: "#fff", padding: 20, borderTopLeftRadius: 20, borderTopRightRadius: 20 },
-  modalTitle: { fontSize: 16, fontWeight: "700", marginBottom: 10, color: "#174A6A" },
-  filterOption: { paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, marginBottom: 8, backgroundColor: "#E0F2FE" },
+
+  /* CARD STYLE BARU */
+  card: {
+    flexDirection: "row",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    marginBottom: 12,
+    padding: 12,
+    elevation: 1,
+    alignItems: "center",
+  },
+
+  image: {
+    width: 55,
+    height: 55,
+    borderRadius: 8,
+    marginRight: 12,
+  },
+
+  cardLeft: { flex: 1 },
+
+  itemName: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#111827",
+  },
+
+  itemPrice: {
+    fontSize: 14,
+    color: "#174A6A",
+    fontWeight: "600",
+    marginTop: 2,
+  },
+
+  itemDate: {
+    fontSize: 12,
+    color: "#6B7280",
+    marginTop: 2,
+  },
+
+  cardRight: {
+    alignItems: "flex-end",
+    minWidth: 100,
+  },
+
+  itemCategory: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#174A6A",
+  },
+
+  statusText: {
+    fontWeight: "700",
+    fontSize: 12,
+    marginTop: 4,
+  },
+
+  modalOverlay: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.3)",
+  },
+
+  modalContent: {
+    backgroundColor: "#fff",
+    padding: 20,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
+
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: 10,
+    color: "#174A6A",
+  },
+
+  filterOption: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginBottom: 8,
+    backgroundColor: "#E0F2FE",
+  },
+
   filterOptionActive: { backgroundColor: "#174A6A" },
+
   filterOptionText: { color: "#174A6A", fontWeight: "600" },
 });

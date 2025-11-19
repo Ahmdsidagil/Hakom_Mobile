@@ -14,7 +14,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
 
 import BottomNav from "../components/BottomNav";
-import { getDashboard } from "../../config/api";
+import { userInfo } from "../../config/api";
 import {
   initDatabase,
   syncFromServer,
@@ -121,7 +121,7 @@ export default function DashboardScreen({ navigation }) {
             await syncPricesToServer();
             await loadRiwayatPendataan();
 
-            const data = await getDashboard(token);
+            const data = await userInfo(token);
             if (data?.success) {
               const userData = {
                 user_name: data.user_name || "Petugas Pasar",

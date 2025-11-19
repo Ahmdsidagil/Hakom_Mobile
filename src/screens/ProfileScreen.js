@@ -11,13 +11,13 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import BottomNav from "../components/BottomNav";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { getDashboard } from "../../config/api";
+import { userInfo } from "../../config/api";
 
 export default function ProfileScreen({ navigation }) {
   const [user, setUser] = useState({
     name: "",
     email: "",
-    phone: "+62877712345678", // sementara hardcode
+    phone: "", // sementara hardcode
     avatar: "https://cdn-icons-png.flaticon.com/512/4140/4140037.png",
   });
 
@@ -28,13 +28,14 @@ export default function ProfileScreen({ navigation }) {
         if (!token) return;
 
         // sementara ambil dari getDashboard karena datanya juga ada di sana
-        const data = await getDashboard(token);
+        const data = await userInfo(token);
 
         if (data && data.success) {
           setUser((prev) => ({
             ...prev,
             name: data.user_name || "Petugas Pasar",
             email: data.user_email || "email@tidakdiketahui.com",
+            phone: data.user_phone || "081234567890"
           }));
         }
       } catch (err) {
