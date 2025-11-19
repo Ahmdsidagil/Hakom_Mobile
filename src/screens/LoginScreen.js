@@ -41,7 +41,7 @@ export default function LoginScreen({ navigation }) {
         return;
       }
 
-                  // ✅ Simpan token ke AsyncStorage
+      // ✅ Simpan token ke AsyncStorage
       if (data.token) {
         await AsyncStorage.setItem('token', data.token);
         console.log('Token disimpan:', data.token);
@@ -77,7 +77,7 @@ export default function LoginScreen({ navigation }) {
               />
               <Text style={styles.title}>MASUK</Text>
               <Text style={styles.subtitle}>
-                Masukkan email dan password Anda.
+                Masukkan email dan kata sandi Anda.
               </Text>
             </View>
 

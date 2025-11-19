@@ -14,7 +14,9 @@ import {
   Animated,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { getDatabase, addPrice } from "../../config/database";
+import NetInfo from "@react-native-community/netinfo";
+
+import { getCategories, getCommoditiesByCategory, addPrice } from "../../config/database";
 
 export default function InputScreen({ navigation, route }) {
   const [categories, setCategories] = useState([]);
@@ -42,13 +44,18 @@ export default function InputScreen({ navigation, route }) {
 
   const initData = async () => {
     try {
-      const db = await getDatabase();
-      const categoriesResult = await db.getAllAsync("SELECT * FROM categories;");
-      const commoditiesResult = await db.getAllAsync("SELECT * FROM commodities;");
-      setCategories(categoriesResult);
-      setCommodities(commoditiesResult);
-    } catch (error) {
-      console.log("initData error:", error);
+      const cats = await getCategories();
+      setCategories(cats);
+
+      // Load semua komoditas sekaligus dari semua kategori
+      const allComms = [];
+      for (const cat of cats) {
+        const comms = await getCommoditiesByCategory(cat.id);
+        allComms.push(...comms);
+      }
+      setCommodities(allComms);
+    } catch (err) {
+      console.error("initData error:", err);
     }
   };
 
@@ -72,15 +79,13 @@ export default function InputScreen({ navigation, route }) {
 
   // ================== HANDLER ==================
   const handleToggleCategory = (category) => {
-    let newSelection = [...selectedCategories];
     const index = selectedCategories.findIndex((c) => c.id === category.id);
-    if (index > -1) {
-      newSelection.splice(index, 1);
-    } else {
-      newSelection.push(category);
-    }
+    const newSelection = [...selectedCategories];
+    if (index > -1) newSelection.splice(index, 1);
+    else newSelection.push(category);
     setSelectedCategories(newSelection);
 
+    // Filter komoditas dari memori
     const filtered = commodities.filter((c) =>
       newSelection.some((cat) => cat.id === c.category_id)
     );
@@ -120,7 +125,6 @@ export default function InputScreen({ navigation, route }) {
     return isNaN(asNumber) ? null : asNumber;
   };
 
-  // ================== SIMPAN DATA ==================
   const handleSubmit = async () => {
     if (selectedCategories.length === 0 || !selectedCommodity || !price) {
       Alert.alert("Peringatan", "Semua field wajib diisi!");
@@ -135,8 +139,6 @@ export default function InputScreen({ navigation, route }) {
 
     setLoading(true);
     try {
-      const tanggalInput = new Date().toISOString();
-
       const relevantCategories = selectedCategories.filter(
         (cat) => cat.id === selectedCommodity.category_id
       );
@@ -150,18 +152,16 @@ export default function InputScreen({ navigation, route }) {
       }
 
       for (const category of relevantCategories) {
-        await addPrice(
-          selectedCommodity.id,
-          category.id,
-          priceNumber,
-          unit,
-          tanggalInput
-        );
+        await addPrice(selectedCommodity.id, category.id, priceNumber, unit);
       }
 
-      showSnackbar("✅ Data harga berhasil disimpan");
+      const netState = await NetInfo.fetch();
+      showSnackbar(
+        netState.isConnected
+          ? "✅ Data harga berhasil disimpan & tersinkron"
+          : "📦 Data harga disimpan offline, menunggu sinkronisasi"
+      );
 
-      // Reset harga & komoditas tapi kategori tetap
       setPrice("");
       setSelectedCommodity(null);
       setUnit("");
@@ -169,11 +169,10 @@ export default function InputScreen({ navigation, route }) {
       if (route?.params?.onAddPrice) {
         await route.params.onAddPrice();
       }
-    } catch (error) {
-      console.error("❌ Gagal menyimpan data:", error);
+    } catch (err) {
+      console.error("❌ Gagal menyimpan data:", err);
       showSnackbar("❌ Terjadi kesalahan saat menyimpan data");
     } finally {
-      console.log("✅ Selesai simpan (reset loading)");
       setLoading(false);
     }
   };
@@ -182,7 +181,6 @@ export default function InputScreen({ navigation, route }) {
   const filteredCategories = categories.filter((c) =>
     c.name_category.toLowerCase().includes(searchKategori.toLowerCase())
   );
-
   const filteredComs = filteredCommodities.filter((c) =>
     c.name_commodity.toLowerCase().includes(searchKomoditas.toLowerCase())
   );
@@ -408,17 +406,6 @@ const styles = StyleSheet.create({
   closeText: { color: "#174A6A", fontWeight: "600" },
   selectAllButton: { paddingVertical: 10, backgroundColor: "#E0F2FE", borderRadius: 8, alignItems: "center", marginBottom: 8 },
   selectAllText: { fontWeight: "600", color: "#174A6A" },
-  snackbar: {
-    position: "absolute",
-    bottom: 30,
-    left: 20,
-    right: 20,
-    backgroundColor: "#16A34A",
-    padding: 12,
-    borderRadius: 10,
-    alignItems: "center",
-    zIndex: 999,
-    elevation: 10,
-  },
+  snackbar: { position: "absolute", bottom: 30, left: 20, right: 20, backgroundColor: "#16A34A", padding: 12, borderRadius: 10, alignItems: "center", zIndex: 999, elevation: 10 },
   snackbarText: { color: "#fff", fontWeight: "600" },
 });

@@ -1,5 +1,4 @@
-// ✅ src/screens/DataLocalScreen.js (versi final & konsisten dengan input)
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -14,11 +13,15 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "@react-navigation/native";
+import NetInfo from "@react-native-community/netinfo";
+import DateTimePicker from "@react-native-community/datetimepicker";
+
 import {
   getAllLocalPrices,
   deleteLocalPrice,
-  addRiwayatHapus,
+  addRiwayatPendataan,
   getDatabase,
+  syncPricesToServer,
 } from "../../config/database";
 
 export default function DataLocalScreen({ navigation }) {
@@ -30,8 +33,11 @@ export default function DataLocalScreen({ navigation }) {
   const [dataKomoditas, setDataKomoditas] = useState([]);
   const [kategori, setKategori] = useState(["Semua"]);
 
-  // ======================================================
-  // 🔹 Ambil kategori dari database
+  // --- DATE PICKER STATE ---
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
+  // ambil kategori dari database
   const fetchCategories = async () => {
     try {
       const db = await getDatabase();
@@ -43,7 +49,7 @@ export default function DataLocalScreen({ navigation }) {
     }
   };
 
-  // 🔹 Ambil data lokal
+  // ambil data lokal
   const fetchData = async () => {
     try {
       const data = await getAllLocalPrices();
@@ -54,10 +60,10 @@ export default function DataLocalScreen({ navigation }) {
             nama: item.name_commodity,
             harga: `Rp ${parseInt(item.price).toLocaleString("id-ID")}`,
             satuan: item.unit || "-",
-            tanggal: item.tanggal || null,
+            tanggal: item.tanggal || new Date().toISOString(),
             kategori: item.name_category || "Lainnya",
-            gambar:
-              "https://cdn-icons-png.flaticon.com/512/415/415682.png",
+            gambar: "https://cdn-icons-png.flaticon.com/512/415/415682.png",
+            status: item.synced ? "Tersinkron" : "Belum Tersinkron",
           }))
         );
       } else {
@@ -68,32 +74,44 @@ export default function DataLocalScreen({ navigation }) {
     }
   };
 
-  // ======================================================
-  // 🔁 Load data setiap kali screen aktif
+  // sinkron otomatis saat online
+  const autoSync = async () => {
+    try {
+      const state = await NetInfo.fetch();
+      if (state.isConnected) {
+        console.log("🌐 Online — mulai sinkronisasi otomatis...");
+        await syncPricesToServer(true);
+        await fetchData();
+      }
+    } catch (err) {
+      console.error("❌ Gagal auto sync:", err);
+    }
+  };
+
   useFocusEffect(
     useCallback(() => {
       fetchCategories();
       fetchData();
+      const unsubscribe = NetInfo.addEventListener(() => autoSync());
+      return () => unsubscribe();
     }, [])
   );
 
-  // 🔹 Format tanggal header
+  // --- FORMAT TANGGAL HEADER ---
   const formatTanggalHeader = () => {
-    const now = new Date();
-    return now.toLocaleDateString("id-ID", {
+    return selectedDate.toLocaleDateString("id-ID", {
       day: "numeric",
       month: "short",
       year: "numeric",
     });
   };
 
-  // 🔹 Format tanggal item
   const formatTanggalItem = (tgl) => {
     if (!tgl) return "-";
     const dateObj = new Date(tgl);
     if (isNaN(dateObj.getTime())) return "-";
     return `${dateObj.toLocaleDateString("id-ID", {
-      day: "numeric",
+      day: "2-digit",
       month: "short",
       year: "numeric",
     })}, ${dateObj.toLocaleTimeString("id-ID", {
@@ -102,8 +120,7 @@ export default function DataLocalScreen({ navigation }) {
     })}`;
   };
 
-  // ======================================================
-  // 🔹 Pilih semua / batal
+  // --- SELEKSI ---
   const handleSelectAll = () => {
     if (selectedItems.length === dataKomoditas.length) {
       setSelectedItems([]);
@@ -115,8 +132,8 @@ export default function DataLocalScreen({ navigation }) {
     setMenuVisible(false);
   };
 
-  // 🔹 Hapus data lokal + simpan ke riwayat hapus
   const handleDelete = () => {
+    if (selectedItems.length === 0) return;
     Alert.alert("Konfirmasi", "Hapus data terpilih?", [
       { text: "Batal", style: "cancel" },
       {
@@ -124,26 +141,18 @@ export default function DataLocalScreen({ navigation }) {
         style: "destructive",
         onPress: async () => {
           try {
-            const deleted = dataKomoditas.filter((i) =>
-              selectedItems.includes(i.id)
-            );
-            for (const item of deleted) {
-              await addRiwayatHapus({
-                name_commodity: item.nama,
-                price: item.harga.replace(/\D/g, ""),
-                unit: item.satuan,
-                name_category: item.kategori,
-                tanggal: item.tanggal,
-              });
-              await deleteLocalPrice(item.id);
+            for (const id of selectedItems) {
+              const itemData = dataKomoditas.find((i) => i.id === id);
+              if (itemData) {
+                await deleteLocalPrice(id, itemData);
+              }
             }
-
             setDataKomoditas((prev) =>
               prev.filter((i) => !selectedItems.includes(i.id))
             );
             setSelectedItems([]);
             setIsSelectionMode(false);
-            Alert.alert("✅ Sukses", "Data berhasil dihapus & disimpan ke riwayat.");
+            Alert.alert("✅ Sukses", "Data berhasil dihapus.");
           } catch (error) {
             console.error("❌ Gagal hapus data:", error);
             Alert.alert("❌ Gagal", "Terjadi kesalahan saat menghapus data.");
@@ -153,38 +162,55 @@ export default function DataLocalScreen({ navigation }) {
     ]);
   };
 
-  // 🔹 Toggle pilih item
   const toggleSelectItem = (id) => {
     const updated = selectedItems.includes(id)
       ? selectedItems.filter((itemId) => itemId !== id)
       : [...selectedItems, id];
     setSelectedItems(updated);
-    if (updated.length === 0) setIsSelectionMode(false);
+    setIsSelectionMode(updated.length > 0);
   };
 
-  // 🔹 Filter data
+  // --- FILTER DATA: INCLUDE TANGGAL TERPILIH ---
   const filteredData = dataKomoditas.filter((item) => {
+    const itemDate = new Date(item.tanggal).toISOString().split("T")[0];
+    const selectedDateString = selectedDate.toISOString().split("T")[0];
+
+    const matchDate = itemDate === selectedDateString;
+
     const matchSearch = item.nama
       ?.toLowerCase()
       .includes(search.toLowerCase().trim());
+
     const matchCategory =
       selectedTab === "Semua" || item.kategori === selectedTab;
-    return matchSearch && matchCategory;
+
+    return matchDate && matchSearch && matchCategory;
   });
 
-  // ======================================================
   return (
     <View style={styles.container}>
-      {/* HEADER */}
       <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
         <View style={styles.headerTop}>
           <Text style={styles.headerTitle}>Data Komoditas Lokal</Text>
+
           <TouchableOpacity onPress={() => setMenuVisible(true)}>
             <Ionicons name="ellipsis-vertical" size={20} color="#fff" />
           </TouchableOpacity>
         </View>
 
-        {/* Popup menu */}
+        {/* --- DATE PICKER POPUP --- */}
+        {showDatePicker && (
+          <DateTimePicker
+            value={selectedDate}
+            mode="date"
+            display="calendar"
+            onChange={(event, newDate) => {
+              setShowDatePicker(false);
+              if (newDate) setSelectedDate(newDate);
+            }}
+          />
+        )}
+
         <Modal
           transparent
           visible={menuVisible}
@@ -204,22 +230,12 @@ export default function DataLocalScreen({ navigation }) {
                   navigation.navigate("Riwayat");
                 }}
               >
-                <Ionicons
-                  name="time-outline"
-                  size={18}
-                  color="#fff"
-                  style={styles.menuIcon}
-                />
+                <Ionicons name="time-outline" size={18} color="#fff" />
                 <Text style={styles.menuText}>Lihat Riwayat</Text>
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.menuItem} onPress={handleSelectAll}>
-                <Ionicons
-                  name="checkmark-done-outline"
-                  size={18}
-                  color="#fff"
-                  style={styles.menuIcon}
-                />
+                <Ionicons name="checkmark-done-outline" size={18} color="#fff" />
                 <Text style={styles.menuText}>
                   {selectedItems.length === dataKomoditas.length
                     ? "Batal Pilih Semua"
@@ -230,7 +246,7 @@ export default function DataLocalScreen({ navigation }) {
           </TouchableOpacity>
         </Modal>
 
-        {/* Search */}
+        {/* --- SEARCH --- */}
         <View style={styles.searchContainer}>
           <Ionicons name="search" size={18} color="#6B7280" />
           <TextInput
@@ -242,12 +258,15 @@ export default function DataLocalScreen({ navigation }) {
           />
         </View>
 
-        {/* Filter Info */}
+        {/* --- FILTER ROW (DATE + COUNT) --- */}
         <View style={styles.filterRow}>
-          <View style={styles.filterBox}>
+          <TouchableOpacity
+            style={styles.filterBox}
+            onPress={() => setShowDatePicker(true)}
+          >
             <Ionicons name="calendar-outline" size={16} color="#174A6A" />
             <Text style={styles.filterText}>{formatTanggalHeader()}</Text>
-          </View>
+          </TouchableOpacity>
 
           <View style={styles.filterBox}>
             <Ionicons name="cube-outline" size={16} color="#174A6A" />
@@ -255,12 +274,12 @@ export default function DataLocalScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Tab kategori dinamis */}
+        {/* --- TAB KATEGORI --- */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View style={styles.tabRow}>
-            {kategori.map((item) => (
+            {kategori.map((item, index) => (
               <TouchableOpacity
-                key={item}
+                key={`${item}-${index}`}
                 style={[
                   styles.tabItem,
                   selectedTab === item && styles.tabActive,
@@ -281,7 +300,7 @@ export default function DataLocalScreen({ navigation }) {
         </ScrollView>
       </LinearGradient>
 
-      {/* LIST DATA */}
+      {/* --- LIST ITEM --- */}
       <ScrollView
         style={styles.listContainer}
         showsVerticalScrollIndicator={false}
@@ -303,6 +322,7 @@ export default function DataLocalScreen({ navigation }) {
                 }}
                 delayLongPress={300}
               >
+                {/* Edit button (absolute) */}
                 {!isSelectionMode && (
                   <TouchableOpacity
                     style={styles.editIcon}
@@ -312,24 +332,47 @@ export default function DataLocalScreen({ navigation }) {
                   </TouchableOpacity>
                 )}
 
+                {/* Image */}
                 <Image source={{ uri: item.gambar }} style={styles.image} />
+
+                {/* LEFT: name + price */}
                 <View style={styles.cardContent}>
                   <Text style={styles.itemName}>{item.nama}</Text>
                   <Text style={styles.itemPrice}>
                     {item.harga} / {item.satuan}
                   </Text>
-                  <Text style={styles.itemDate}>
-                    {formatTanggalItem(item.tanggal)}
-                  </Text>
-                  <Text style={styles.itemCategory}>{item.kategori}</Text>
                 </View>
 
+                {/* RIGHT: date + category + status */}
+                <View style={styles.rightInfo}>
+                  <Text style={[styles.itemDate, { textAlign: "right" }]}>
+                    {formatTanggalItem(item.tanggal)}
+                  </Text>
+
+                  <Text style={[styles.itemCategory, { textAlign: "right" }]}>
+                    {item.kategori}
+                  </Text>
+
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      marginTop: 6,
+                      fontWeight: "700",
+                      textAlign: "right",
+                      color: item.status === "Tersinkron" ? "#16A34A" : "#DC2626",
+                    }}
+                  >
+                    {item.status}
+                  </Text>
+                </View>
+
+                {/* selected check */}
                 {selected && (
                   <Ionicons
                     name="checkmark-circle"
                     size={22}
                     color="#16A34A"
-                    style={{ alignSelf: "center" }}
+                    style={{ alignSelf: "center", marginLeft: 8 }}
                   />
                 )}
               </TouchableOpacity>
@@ -337,18 +380,14 @@ export default function DataLocalScreen({ navigation }) {
           })
         ) : (
           <Text
-            style={{
-              textAlign: "center",
-              color: "#6B7280",
-              marginTop: 40,
-            }}
+            style={{ textAlign: "center", color: "#6B7280", marginTop: 40 }}
           >
             Tidak ada data ditemukan
           </Text>
         )}
       </ScrollView>
 
-      {/* Tombol Hapus */}
+      {/* DELETE BUTTON */}
       {selectedItems.length > 0 && (
         <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
           <Ionicons name="trash-outline" size={18} color="#fff" />
@@ -356,7 +395,7 @@ export default function DataLocalScreen({ navigation }) {
         </TouchableOpacity>
       )}
 
-      {/* Bottom Navigation */}
+      {/* NAV BAWAH */}
       <View style={styles.bottomNav}>
         <TouchableOpacity
           style={styles.navItem}
@@ -383,8 +422,6 @@ export default function DataLocalScreen({ navigation }) {
   );
 }
 
-// ======================================================
-// 🎨 STYLES
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },
   header: {
@@ -413,6 +450,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     width: 170,
     elevation: 6,
+    overflow: "hidden",
   },
   menuItem: {
     flexDirection: "row",
@@ -422,7 +460,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255,255,255,0.2)",
   },
-  menuIcon: { marginRight: 8 },
   menuText: { fontSize: 14, color: "#fff", fontWeight: "600" },
   searchContainer: {
     flexDirection: "row",
@@ -472,7 +509,8 @@ const styles = StyleSheet.create({
     shadowColor: "#000",
     shadowOpacity: 0.05,
     shadowRadius: 3,
-    alignItems: "center",
+    alignItems: "center",   
+    paddingRight: 16,
   },
   editIcon: {
     position: "absolute",
@@ -485,37 +523,39 @@ const styles = StyleSheet.create({
   },
   image: { width: 60, height: 60, borderRadius: 8, marginRight: 10 },
   cardContent: { flex: 1 },
+  rightInfo: {
+    alignItems: "flex-end",
+    justifyContent: "center",
+    minWidth: 120,
+    paddingRight: 28,
+  },
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "600" },
   itemDate: { fontSize: 12, color: "#6B7280" },
-  itemCategory: {
-    fontSize: 12,
-    color: "#9CA3AF",
-    marginTop: 2,
-    fontStyle: "italic",
-  },
+  itemCategory: { fontSize: 12, color: "#9CA3AF", marginTop: 2 },
   deleteButton: {
     position: "absolute",
-    bottom: 150,
+    bottom: 90,
     right: 20,
-    backgroundColor: "#EF4444",
+    backgroundColor: "#DC2626",
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 14,
     paddingVertical: 10,
-    borderRadius: 12,
+    paddingHorizontal: 18,
+    borderRadius: 30,
+    elevation: 5,
   },
-  deleteText: { color: "#fff", fontWeight: "700", marginLeft: 6 },
+  deleteText: { color: "#fff", marginLeft: 6, fontWeight: "700" },
   bottomNav: {
     flexDirection: "row",
     justifyContent: "space-around",
     alignItems: "center",
     backgroundColor: "#fff",
     paddingVertical: 10,
-    borderTopColor: "#E5E7EB",
     borderTopWidth: 1,
+    borderTopColor: "#E5E7EB",
   },
   navItem: { alignItems: "center" },
-  navText: { fontSize: 12, color: "#6B7280", marginTop: 3 },
-  navTextActive: { color: "#174A6A", fontWeight: "bold" },
+  navText: { fontSize: 12, color: "#6B7280" },
+  navTextActive: { color: "#174A6A", fontWeight: "700" },
 });
