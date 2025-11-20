@@ -9,16 +9,35 @@ import {
   KeyboardAvoidingView,
   Platform,
   Modal,
-  Animated,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
 export default function EditDataScreen({ route, navigation }) {
   const { item } = route.params;
 
+  // Ambil angka saja dari harga awal
   const [harga, setHarga] = useState(item.harga.replace(/[^0-9]/g, ""));
   const [satuan] = useState(item.satuan || "kg");
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
+
+  // ============================
+  // 🔹 Format harga otomatis
+  // ============================
+  const formatRupiah = (value) => {
+    if (!value) return "";
+    let numberString = value.replace(/[^,\d]/g, "");
+    const split = numberString.split(",");
+    let sisa = split[0].length % 3;
+    let rupiah = split[0].substr(0, sisa);
+    const ribuan = split[0].substr(sisa).match(/\d{3}/g);
+
+    if (ribuan) {
+      const separator = sisa ? "." : "";
+      rupiah += separator + ribuan.join(".");
+    }
+
+    return rupiah;
+  };
 
   const handleSave = () => {
     if (!harga) {
@@ -28,7 +47,7 @@ export default function EditDataScreen({ route, navigation }) {
 
     const updatedData = {
       ...item,
-      harga: `Rp. ${parseInt(harga).toLocaleString("id-ID")}/${satuan}`,
+      harga: `Rp. ${formatRupiah(harga)}/${satuan}`,
     };
 
     console.log("✅ Data berhasil diperbarui:", updatedData);
@@ -36,7 +55,7 @@ export default function EditDataScreen({ route, navigation }) {
     // Tampilkan popup sukses
     setShowSuccessPopup(true);
 
-    // Tutup popup dan kembali ke halaman utama setelah 2 detik
+    // Tutup popup dan kembali ke halaman utama setelah 1.5 detik
     setTimeout(() => {
       setShowSuccessPopup(false);
       navigation.goBack();
@@ -83,8 +102,11 @@ export default function EditDataScreen({ route, navigation }) {
               style={styles.input}
               placeholder="Masukkan harga baru"
               keyboardType="numeric"
-              value={harga}
-              onChangeText={setHarga}
+              value={formatRupiah(harga)}
+              onChangeText={(text) => {
+                const cleaned = text.replace(/[^0-9]/g, "");
+                setHarga(cleaned);
+              }}
             />
           </View>
 
@@ -137,12 +159,16 @@ export default function EditDataScreen({ route, navigation }) {
 }
 
 const styles = StyleSheet.create({
- header: {
+  header: {
+    backgroundColor: "#174A6A",
+    paddingVertical: 24,
+    paddingTop: 12,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#174A6A",
-    paddingVertical: 12,
-    paddingHorizontal: 12,
   },
   backButton: {
     padding: 8,
@@ -197,8 +223,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#174A6A",
   },
-
-  // --- Popup Styles ---
   popupOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.25)",

@@ -23,6 +23,7 @@ import {
   getAllLocalPrices,
   getDashboardStats,
   getLatestPrices,
+  countUniqueCommodities,
 } from "../../config/database";
 
 export default function DashboardScreen({ navigation }) {
@@ -34,6 +35,7 @@ export default function DashboardScreen({ navigation }) {
   });
   const [greeting, setGreeting] = useState("");
   const [isConnected, setIsConnected] = useState(true);
+  const [uniqueCount, setUniqueCount] = useState(0); // jumlah komoditas unik yang sudah diinput
 
   const formatTanggalItem = (tgl) => {
     if (!tgl) return "-";
@@ -56,13 +58,11 @@ export default function DashboardScreen({ navigation }) {
     return `Rp ${num.toLocaleString("id-ID")}`;
   };
 
-  // 🔹 Load riwayat gabungan offline + online tanpa status
   const loadRiwayatPendataan = async () => {
     try {
       const riwayatOnline = await getAllRiwayatPendataan();
       const riwayatOffline = await getAllLocalPrices();
 
-      // Hanya ambil data tanpa status
       const offlineFormatted = riwayatOffline.map((item) => ({
         ...item,
       }));
@@ -73,7 +73,6 @@ export default function DashboardScreen({ navigation }) {
 
       const combined = [...onlineFormatted, ...offlineFormatted];
 
-      // Unik berdasarkan commodity_id + timestamp
       const map = new Map();
       combined.forEach((item) => {
         const key =
@@ -100,12 +99,24 @@ export default function DashboardScreen({ navigation }) {
     }
   };
 
-  // 🔹 Setup awal & salam
+  const loadUniqueCount = async () => {
+    try {
+      const c = await countUniqueCommodities();
+      setUniqueCount(c ?? 0);
+    } catch (err) {
+      console.error("❌ Gagal ambil komoditas unik:", err);
+      setUniqueCount(0);
+    }
+  };
+
   useEffect(() => {
     let unsubscribe;
     const setup = async () => {
       await initDatabase();
+
+      // load data awal
       await loadRiwayatPendataan();
+      await loadUniqueCount();
 
       unsubscribe = NetInfo.addEventListener((state) => {
         setIsConnected(state.isConnected);
@@ -120,6 +131,7 @@ export default function DashboardScreen({ navigation }) {
             await syncFromServer();
             await syncPricesToServer();
             await loadRiwayatPendataan();
+            await loadUniqueCount();
 
             const data = await userInfo(token);
             if (data?.success) {
@@ -154,7 +166,6 @@ export default function DashboardScreen({ navigation }) {
     return () => unsubscribe && unsubscribe();
   }, []);
 
-  // 🔄 Auto-sync ketika online kembali
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(async (state) => {
       setIsConnected(state.isConnected);
@@ -163,6 +174,7 @@ export default function DashboardScreen({ navigation }) {
           console.log("🔄 Online kembali — mulai auto sync...");
           await syncPricesToServer();
           await loadRiwayatPendataan();
+          await loadUniqueCount();
         } catch (err) {
           console.error("❌ Auto-sync gagal:", err);
         }
@@ -175,13 +187,23 @@ export default function DashboardScreen({ navigation }) {
     navigation.navigate("Input", {
       onAddPrice: async () => {
         await loadRiwayatPendataan();
+        await loadUniqueCount(); // update jumlah komoditas unik setelah input
       },
     });
   };
 
   const handleNotifikasi = () => navigation.navigate("Notification");
 
-  // 🔹 UI
+  // ===============================
+  // ADD TANGGAL DI BAWAH NAMA PASAR
+  // ===============================
+  const tanggalSekarang = new Date().toLocaleDateString("id-ID", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+
   return (
     <View style={styles.container}>
       <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
@@ -218,10 +240,18 @@ export default function DashboardScreen({ navigation }) {
             <View>
               <Text style={styles.label}>Pasar</Text>
               <Text style={styles.value}>{user?.market_name}</Text>
+
+              {/* ⭐ TANGGAL DITAMBAHKAN DI SINI */}
+              <Text style={styles.dateBelowMarket}>{tanggalSekarang}</Text>
             </View>
+
             <View>
               <Text style={styles.label}>Total Komoditas</Text>
               <Text style={styles.value}>{user?.total_commodities}</Text>
+
+              {/* NEW: Komoditas Sudah Diinput */}
+              <Text style={styles.subLabel}>Komoditas Sudah Diinput</Text>
+              <Text style={styles.uniqueValue}>{uniqueCount}</Text>
             </View>
           </View>
 
@@ -271,7 +301,6 @@ export default function DashboardScreen({ navigation }) {
   );
 }
 
-// 🎨 Styles tetap sama
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F3F4F6" },
   header: { paddingTop: 50, paddingBottom: 40, paddingHorizontal: 20 },
@@ -285,6 +314,7 @@ const styles = StyleSheet.create({
   statusText: { color: "#fff", fontSize: 12, fontWeight: "600" },
   greeting: { color: "#E0F2FE", fontSize: 16, fontWeight: "500" },
   name: { color: "#FFFFFF", fontSize: 18, fontWeight: "700" },
+
   body: {
     flex: 1,
     marginTop: -20,
@@ -294,6 +324,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 25,
   },
+
   infoCard: {
     backgroundColor: "#FFFFFF",
     borderRadius: 15,
@@ -304,9 +335,22 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
+
+  dateBelowMarket: {
+    marginTop: 2,
+    color: "#6B7280",
+    fontSize: 12,
+    fontStyle: "italic",
+  },
+
   rowBetween: { flexDirection: "row", justifyContent: "space-between" },
   label: { color: "#6B7280", fontSize: 13 },
   value: { color: "#111827", fontSize: 15, fontWeight: "600" },
+
+  // new styles for the unique count display
+  subLabel: { color: "#6B7280", fontSize: 12, marginTop: 8 },
+  uniqueValue: { color: "#111827", fontSize: 15, fontWeight: "700" },
+
   btnTambah: {
     backgroundColor: "#174A6A",
     paddingVertical: 10,
@@ -346,3 +390,4 @@ const styles = StyleSheet.create({
   },
   emptyText: { color: "#6B7280", textAlign: "center", marginTop: 20 },
 });
+ 

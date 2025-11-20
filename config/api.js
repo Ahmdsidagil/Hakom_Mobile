@@ -10,6 +10,7 @@ export default {
   SYNC_PRICES: `${BASE_URL}/sync`,
   UPDATE_PASSWORD: `${BASE_URL}/change-password`,
   GET_MARKET: `${BASE_URL}/markets`,
+  UNIT: `${BASE_URL}/units`,
 };
 
 // Ambil data dashboard

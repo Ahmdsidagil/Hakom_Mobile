@@ -1,5 +1,5 @@
 // ====================================
-// 📦 config/database.js (versi lengkap & rapi)
+// 📦 config/database.js (versi lengkap & rapi, unit aman)
 // ====================================
 import * as SQLite from "expo-sqlite";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -87,6 +87,10 @@ export const initDatabase = async () => {
       name_category TEXT,
       tanggal TEXT
     );`,
+    `CREATE TABLE IF NOT EXISTS units (
+      id INTEGER PRIMARY KEY,
+      name TEXT
+    );`,
   ];
 
   for (const query of tableQueries) {
@@ -124,14 +128,14 @@ export const initDatabase = async () => {
 export const getDatabase = async () => {
   if (!db) await initDatabase();
   return db;
-}; 
+};
 
 // ====================================
-// 🔹 Sinkronisasi Data dari Server
+// 🔹 Sinkronisasi Data dari Server (unit lengkap)
 // ====================================
 export const syncFromServer = async () => {
   try {
-    console.log("📡 Sinkronisasi data kategori, komoditas, & pasar...");
+    console.log("📡 Sinkronisasi data kategori, komoditas, pasar, & unit...");
     const token = await AsyncStorage.getItem("token");
     if (!token) throw new Error("Token tidak ditemukan");
 
@@ -139,6 +143,7 @@ export const syncFromServer = async () => {
       { name: "categories", url: api.CATEGORIES },
       { name: "commodities", url: api.COMMODITIES },
       { name: "markets", url: api.GET_MARKET },
+      { name: "units", url: api.UNIT },
     ];
 
     const results = {};
@@ -168,6 +173,20 @@ export const syncFromServer = async () => {
     const db = await getDatabase();
 
     // =========================
+    // Simpan unit
+    // =========================
+    if (results.units) {
+      await db.runAsync("DELETE FROM units;");
+      for (const u of results.units) {
+        await db.runAsync(
+          `INSERT INTO units (id, name) VALUES (?, ?);`,
+          [u.id, u.name || "-"]
+        );
+      }
+      console.log("✅ Data units berhasil disimpan");
+    }
+
+    // =========================
     // Simpan kategori
     // =========================
     if (results.categories) {
@@ -182,19 +201,30 @@ export const syncFromServer = async () => {
     }
 
     // =========================
-    // Simpan komoditas
+    // Simpan komoditas dengan mapping unit
     // =========================
     if (results.commodities) {
       await db.runAsync("DELETE FROM commodities;");
+
       for (const com of results.commodities) {
         const categoryId = com.category_id || com.category?.id || null;
-        const unitName = com.unit?.nama_satuan || null;
+        let unitName = "kg"; // default
+
+        if (com.unit_id && results.units) {
+          const foundUnit = results.units.find(u => u.id === com.unit_id);
+          if (foundUnit) unitName = foundUnit.name;
+        } else if (com.unit?.name) {
+          unitName = com.unit.name;
+        } else if (com.unit) {
+          unitName = com.unit;
+        }
+
         await db.runAsync(
           `INSERT INTO commodities (id, name_commodity, category_id, unit) VALUES (?, ?, ?, ?);`,
           [com.id, com.name_commodity || "-", categoryId, unitName]
         );
       }
-      console.log("✅ Data komoditas berhasil disimpan");
+      console.log("✅ Data komoditas berhasil disimpan dengan unit");
     }
 
     // =========================
@@ -229,7 +259,8 @@ export const addPrice = async (commodityId, categoryId, price) => {
 
   const commodity = await db.getFirstAsync(`SELECT name_commodity, unit FROM commodities WHERE id = ?;`, [commodityId]);
   const category = await db.getFirstAsync(`SELECT name_category FROM categories WHERE id = ?;`, [categoryId]);
-  const unit = commodity?.unit || "-";
+  // fallback unit jika null
+  const unit = commodity?.unit || "kg";
 
   if (isOnline && token) {
     try {
@@ -459,3 +490,11 @@ export const getLocalPricesForScreen = async (categoryId = null, commodityId = n
   return await db.getAllAsync(query, params);
 };
 
+// Hitung komoditas unik
+export const countUniqueCommodities = async () => {
+  const db = await getDatabase();
+  const result = await db.getFirstAsync(`
+    SELECT COUNT(DISTINCT commodity_id) AS total FROM local_prices;
+  `);
+  return result?.total ?? 0;
+};

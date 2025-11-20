@@ -1,5 +1,5 @@
-// src/screens/InputScreen.js
-import React, { useEffect, useState } from "react";
+// src/screens/InputScreen.js (Full Version With Perfect 6-Column Grid + Auto Format Rp)
+import React, { useEffect, useState, useRef } from "react";
 import {
   View,
   Text,
@@ -9,120 +9,120 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  Modal,
   Alert,
   Animated,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import NetInfo from "@react-native-community/netinfo";
 
-import { getCategories, getCommoditiesByCategory, addPrice } from "../../config/database";
+import {
+  getCategories,
+  getCommoditiesByCategory,
+  addPrice,
+} from "../../config/database";
 
 export default function InputScreen({ navigation, route }) {
   const [categories, setCategories] = useState([]);
   const [commodities, setCommodities] = useState([]);
-  const [filteredCommodities, setFilteredCommodities] = useState([]);
-
   const [selectedCategories, setSelectedCategories] = useState([]);
   const [selectedCommodity, setSelectedCommodity] = useState(null);
+
   const [unit, setUnit] = useState("");
   const [price, setPrice] = useState("");
-
-  const [modalKategoriVisible, setModalKategoriVisible] = useState(false);
-  const [modalKomoditasVisible, setModalKomoditasVisible] = useState(false);
-  const [searchKategori, setSearchKategori] = useState("");
-  const [searchKomoditas, setSearchKomoditas] = useState("");
-
   const [loading, setLoading] = useState(false);
+
   const [snackbarMessage, setSnackbarMessage] = useState("");
   const [snackbarAnim] = useState(new Animated.Value(0));
 
-  // ================== INIT DATA ==================
+  const scrollRef = useRef();
+
   useEffect(() => {
-    initData();
+    loadData();
   }, []);
 
-  const initData = async () => {
+  const loadData = async () => {
     try {
       const cats = await getCategories();
       setCategories(cats);
 
-      // Load semua komoditas sekaligus dari semua kategori
-      const allComms = [];
+      const all = [];
       for (const cat of cats) {
-        const comms = await getCommoditiesByCategory(cat.id);
-        allComms.push(...comms);
+        const res = await getCommoditiesByCategory(cat.id);
+        all.push(...res);
       }
-      setCommodities(allComms);
+      setCommodities(all);
     } catch (err) {
-      console.error("initData error:", err);
+      console.log("Load error:", err);
     }
   };
 
-  // ================== SNACKBAR ==================
-  const showSnackbar = (message) => {
-    setSnackbarMessage(message);
+  const showSnackbar = (msg) => {
+    setSnackbarMessage(msg);
     Animated.timing(snackbarAnim, {
       toValue: 1,
-      duration: 300,
+      duration: 250,
       useNativeDriver: true,
     }).start(() => {
       setTimeout(() => {
         Animated.timing(snackbarAnim, {
           toValue: 0,
-          duration: 300,
+          duration: 250,
           useNativeDriver: true,
         }).start(() => setSnackbarMessage(""));
       }, 1500);
     });
   };
 
-  // ================== HANDLER ==================
-  const handleToggleCategory = (category) => {
-    const index = selectedCategories.findIndex((c) => c.id === category.id);
-    const newSelection = [...selectedCategories];
-    if (index > -1) newSelection.splice(index, 1);
-    else newSelection.push(category);
-    setSelectedCategories(newSelection);
+  const toggleCategory = (cat) => {
+    const exists = selectedCategories.some((c) => c.id === cat.id);
+    let updated;
 
-    // Filter komoditas dari memori
-    const filtered = commodities.filter((c) =>
-      newSelection.some((cat) => cat.id === c.category_id)
-    );
-    setFilteredCommodities(filtered);
-
-    if (selectedCommodity && !filtered.some((c) => c.id === selectedCommodity.id)) {
-      setSelectedCommodity(null);
-      setUnit("");
-    }
-  };
-
-  const handleToggleSelectAllCategories = () => {
-    if (selectedCategories.length === categories.length) {
-      setSelectedCategories([]);
-      setFilteredCommodities([]);
-      setSelectedCommodity(null);
-      setUnit("");
+    if (exists) {
+      updated = selectedCategories.filter((c) => c.id !== cat.id);
     } else {
-      setSelectedCategories([...categories]);
-      setFilteredCommodities([...commodities]);
+      updated = [...selectedCategories, cat];
+    }
+
+    setSelectedCategories(updated);
+
+    if (
+      selectedCommodity &&
+      !updated.some((c) => c.id === selectedCommodity.category_id)
+    ) {
+      setSelectedCommodity(null);
+      setUnit("");
     }
   };
 
-  const handleSelectCommodity = (commodity) => {
-    setSelectedCommodity(commodity);
-    setUnit(commodity.unit);
+  const handleSelectCommodity = (item) => {
+    setSelectedCommodity(item);
+    setUnit(item.unit);
+  };
+
+  // ============================
+  // 🔥 Format harga otomatis
+  // ============================
+  const formatRupiah = (value) => {
+    if (!value) return "";
+    let numberString = value.replace(/[^,\d]/g, "");
+    const split = numberString.split(",");
+    let sisa = split[0].length % 3;
+    let rupiah = split[0].substr(0, sisa);
+    const ribuan = split[0].substr(sisa).match(/\d{3}/g);
+
+    if (ribuan) {
+      const separator = sisa ? "." : "";
+      rupiah += separator + ribuan.join(".");
+    }
+
+    return rupiah;
   };
 
   const sanitizePriceToNumber = (raw) => {
-    if (!raw && raw !== 0) return 0;
-    const cleaned = String(raw)
-      .replace(/Rp/gi, "")
-      .replace(/[^0-9.,-]/g, "")
-      .replace(/,/g, "")
-      .replace(/\s+/g, "");
-    const asNumber = parseFloat(cleaned);
-    return isNaN(asNumber) ? null : asNumber;
+    if (!raw) return 0;
+    const cleaned = raw.replace(/Rp/gi, "").replace(/[^0-9]/g, "");
+    const num = parseInt(cleaned);
+    return isNaN(num) ? null : num;
   };
 
   const handleSubmit = async () => {
@@ -131,235 +131,181 @@ export default function InputScreen({ navigation, route }) {
       return;
     }
 
-    const priceNumber = sanitizePriceToNumber(price);
-    if (priceNumber === null) {
-      Alert.alert("Peringatan", "Masukkan harga yang valid (angka).");
+    const priceNum = sanitizePriceToNumber(price);
+    if (priceNum === null) {
+      Alert.alert("Peringatan", "Harga tidak valid.");
       return;
     }
 
     setLoading(true);
     try {
-      const relevantCategories = selectedCategories.filter(
-        (cat) => cat.id === selectedCommodity.category_id
+      const related = selectedCategories.filter(
+        (c) => c.id === selectedCommodity.category_id
       );
 
-      if (relevantCategories.length === 0) {
+      if (related.length === 0) {
         Alert.alert(
           "Peringatan",
-          "Komoditas yang dipilih tidak sesuai kategori yang dipilih!"
+          "Komoditas tidak sesuai dengan kategori yang dipilih."
         );
         return;
       }
 
-      for (const category of relevantCategories) {
-        await addPrice(selectedCommodity.id, category.id, priceNumber, unit);
+      for (const cat of related) {
+        await addPrice(selectedCommodity.id, cat.id, priceNum, unit);
       }
 
-      const netState = await NetInfo.fetch();
+      const net = await NetInfo.fetch();
       showSnackbar(
-        netState.isConnected
-          ? "✅ Data harga berhasil disimpan & tersinkron"
-          : "📦 Data harga disimpan offline, menunggu sinkronisasi"
+        net.isConnected
+          ? "✅ Berhasil disimpan & tersinkron"
+          : "📦 Disimpan offline, menunggu sinkron"
       );
 
       setPrice("");
       setSelectedCommodity(null);
       setUnit("");
 
-      if (route?.params?.onAddPrice) {
-        await route.params.onAddPrice();
-      }
+      if (route?.params?.onAddPrice) route.params.onAddPrice();
     } catch (err) {
-      console.error("❌ Gagal menyimpan data:", err);
-      showSnackbar("❌ Terjadi kesalahan saat menyimpan data");
+      console.error(err);
+      showSnackbar("❌ Terjadi kesalahan");
     } finally {
       setLoading(false);
     }
   };
 
-  // ================== FILTER ==================
-  const filteredCategories = categories.filter((c) =>
-    c.name_category.toLowerCase().includes(searchKategori.toLowerCase())
-  );
-  const filteredComs = filteredCommodities.filter((c) =>
-    c.name_commodity.toLowerCase().includes(searchKomoditas.toLowerCase())
+  const filteredCommodities = commodities.filter((c) =>
+    selectedCategories.some((cat) => cat.id === c.category_id)
   );
 
-  // ================== UI ==================
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: "#fff" }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
-      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 6 }}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Tambah Data Harga</Text>
         <View style={{ width: 22 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.container}>
-        {/* Kategori */}
-        <Text style={styles.label}>Kategori</Text>
-        <TouchableOpacity
-          style={styles.dropdownHeader}
-          onPress={() => setModalKategoriVisible(true)}
-        >
-          <Text style={{ color: selectedCategories.length ? "#000" : "#9CA3AF", flex: 1 }}>
-            {selectedCategories.length
-              ? selectedCategories.map((c) => c.name_category).join(", ")
-              : "Pilih kategori"}
-          </Text>
-          <Ionicons name="chevron-down" size={18} color="#174A6A" />
-        </TouchableOpacity>
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.page}>
+        <Text style={styles.title}>Pilih Kategori</Text>
 
-        {/* Komoditas */}
-        <Text style={styles.label}>Nama Komoditas</Text>
-        <TouchableOpacity
-          style={styles.dropdownHeader}
-          onPress={() => {
-            if (selectedCategories.length === 0) {
-              Alert.alert("Peringatan", "Pilih minimal satu kategori terlebih dahulu!");
-              return;
-            }
-            setModalKomoditasVisible(true);
-          }}
-        >
-          <Text style={{ color: selectedCommodity ? "#000" : "#9CA3AF", flex: 1 }}>
-            {selectedCommodity ? selectedCommodity.name_commodity : "Pilih komoditas"}
-          </Text>
-          <Ionicons name="chevron-down" size={18} color="#174A6A" />
-        </TouchableOpacity>
-
-        {/* Harga & Satuan */}
-        <View style={styles.row}>
-          <View style={{ flex: 1, marginRight: 8 }}>
-            <Text style={styles.label}>Harga</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Rp."
-              keyboardType="numeric"
-              value={price}
-              onChangeText={setPrice}
-              editable={!loading}
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.label}>Satuan</Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: "#f0f0f0" }]}
-              value={unit}
-              editable={false}
-            />
-          </View>
+        <View style={styles.grid}>
+          {categories.map((cat) => {
+            const selected = selectedCategories.some((c) => c.id === cat.id);
+            return (
+              <TouchableOpacity
+                key={cat.id}
+                style={[styles.gridBoxSmall, selected && styles.activeGridBox]}
+                onPress={() => toggleCategory(cat)}
+              >
+                <Ionicons
+                  name="apps-outline"
+                  size={24}
+                  color={selected ? "#fff" : "#174A6A"}
+                />
+                <Text
+                  style={[
+                    styles.boxLabel,
+                    { color: selected ? "#fff" : "#174A6A" },
+                  ]}
+                  numberOfLines={2}
+                >
+                  {cat.name_category}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
-        <TouchableOpacity
-          style={[styles.button, loading && { opacity: 0.7 }]}
-          onPress={handleSubmit}
-          disabled={loading}
-        >
-          <Text style={styles.buttonText}>{loading ? "Menyimpan..." : "Simpan"}</Text>
-        </TouchableOpacity>
-      </ScrollView>
+        {selectedCategories.length > 0 && (
+          <>
+            <Text style={[styles.title, { marginTop: 15 }]}>Pilih Komoditas</Text>
 
-      {/* Modal Kategori */}
-      <Modal
-        visible={modalKategoriVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setModalKategoriVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Pilih Kategori</Text>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Cari kategori..."
-              value={searchKategori}
-              onChangeText={setSearchKategori}
-            />
+            <View style={styles.grid}>
+              {filteredCommodities.map((item) => {
+                const active = selectedCommodity?.id === item.id;
+                return (
+                  <TouchableOpacity
+                    key={item.id}
+                    style={[styles.gridBoxSmall, active && styles.activeGridBox]}
+                    onPress={() => handleSelectCommodity(item)}
+                  >
+                    <Ionicons
+                      name="leaf-outline"
+                      size={24}
+                      color={active ? "#fff" : "#0F5132"}
+                    />
+                    <Text
+                      style={[
+                        styles.boxLabel,
+                        { color: active ? "#fff" : "#0F5132" },
+                      ]}
+                      numberOfLines={2}
+                    >
+                      {item.name_commodity}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </>
+        )}
+
+        {selectedCommodity && (
+          <View style={{ marginTop: 25 }}>
+            <Text style={styles.title}>Harga & Satuan</Text>
+
+            <View style={styles.row}>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={styles.label}>Harga</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Rp."
+                  keyboardType="numeric"
+                  value={price}
+                  onChangeText={(text) => {
+                    const cleaned = text.replace(/[^0-9]/g, "");
+                    setPrice(formatRupiah(cleaned));
+                  }}
+                  onFocus={() => {
+                    setTimeout(() => {
+                      scrollRef.current?.scrollTo({ y: 650, animated: true });
+                    }, 200);
+                  }}
+                />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Satuan</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: "#f3f3f3" }]}
+                  value={unit}
+                  editable={false}
+                />
+              </View>
+            </View>
+
             <TouchableOpacity
-              style={styles.selectAllButton}
-              onPress={handleToggleSelectAllCategories}
+              style={[styles.button, loading && { opacity: 0.7 }]}
+              onPress={handleSubmit}
+              disabled={loading}
             >
-              <Text style={styles.selectAllText}>
-                {selectedCategories.length === categories.length
-                  ? "Batal Pilih Semua"
-                  : "Pilih Semua"}
+              <Text style={styles.buttonText}>
+                {loading ? "Menyimpan..." : "Simpan"}
               </Text>
             </TouchableOpacity>
-            <ScrollView style={{ maxHeight: 300 }}>
-              {filteredCategories.map((item) => {
-                const isSelected = selectedCategories.some((c) => c.id === item.id);
-                return (
-                  <TouchableOpacity
-                    key={item.id}
-                    style={[styles.optionItem, isSelected && { backgroundColor: "#E0F2FE" }]}
-                    onPress={() => handleToggleCategory(item)}
-                  >
-                    <Text style={styles.optionText}>
-                      {item.name_category} {isSelected ? "✅" : ""}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-            <TouchableOpacity onPress={() => setModalKategoriVisible(false)} style={styles.closeButton}>
-              <Text style={styles.closeText}>Selesai</Text>
-            </TouchableOpacity>
           </View>
-        </View>
-      </Modal>
+        )}
 
-      {/* Modal Komoditas */}
-      <Modal
-        visible={modalKomoditasVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setModalKomoditasVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Pilih Komoditas</Text>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Cari komoditas..."
-              value={searchKomoditas}
-              onChangeText={setSearchKomoditas}
-            />
-            <ScrollView style={{ maxHeight: 300 }}>
-              {filteredComs.map((item) => {
-                const categoryNames = selectedCategories
-                  .filter((cat) => cat.id === item.category_id)
-                  .map((cat) => cat.name_category)
-                  .join(", ");
-                return (
-                  <TouchableOpacity
-                    key={item.id}
-                    style={styles.optionItem}
-                    onPress={() => {
-                      handleSelectCommodity(item);
-                      setModalKomoditasVisible(false);
-                    }}
-                  >
-                    <Text style={styles.optionText}>
-                      {item.name_commodity} {categoryNames ? `(Kategori: ${categoryNames})` : ""}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-            <TouchableOpacity onPress={() => setModalKomoditasVisible(false)} style={styles.closeButton}>
-              <Text style={styles.closeText}>Tutup</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+        <View style={{ height: 120 }} />
+      </ScrollView>
 
-      {/* Snackbar */}
       {snackbarMessage ? (
         <Animated.View
           style={[
@@ -370,7 +316,7 @@ export default function InputScreen({ navigation, route }) {
                 {
                   translateY: snackbarAnim.interpolate({
                     inputRange: [0, 1],
-                    outputRange: [50, 0],
+                    outputRange: [40, 0],
                   }),
                 },
               ],
@@ -384,28 +330,102 @@ export default function InputScreen({ navigation, route }) {
   );
 }
 
-// ================== STYLES ==================
 const styles = StyleSheet.create({
-  header: { flexDirection: "row", alignItems: "center", backgroundColor: "#174A6A", paddingVertical: 12, paddingHorizontal: 12 },
-  backButton: { padding: 8, marginTop: 24, marginRight: 12 },
-  headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700", marginTop: 24 },
-  container: { padding: 22, paddingBottom: 40 },
-  label: { fontSize: 14, fontWeight: "600", color: "#333", marginTop: 10, marginBottom: 5 },
-  input: { borderWidth: 1, borderColor: "#174A6A", borderRadius: 10, padding: 10, backgroundColor: "#fff" },
-  dropdownHeader: { borderWidth: 1, borderColor: "#174A6A", borderRadius: 10, padding: 10, backgroundColor: "#fff", flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  row: { flexDirection: "row", justifyContent: "space-between" },
-  button: { backgroundColor: "#174A6A", padding: 14, borderRadius: 10, alignItems: "center", marginTop: 20 },
-  buttonText: { color: "#fff", fontWeight: "bold" },
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.3)", justifyContent: "center", alignItems: "center" },
-  modalBox: { width: "85%", backgroundColor: "#fff", borderRadius: 12, padding: 20, borderWidth: 1, borderColor: "#174A6A", maxHeight: "80%" },
-  modalTitle: { fontSize: 16, fontWeight: "bold", color: "#174A6A", marginBottom: 10 },
-  searchInput: { borderWidth: 1, borderColor: "#174A6A", borderRadius: 8, padding: 8, marginBottom: 10 },
-  optionItem: { paddingVertical: 10, borderBottomWidth: 1, borderColor: "#eee" },
-  optionText: { color: "#333" },
-  closeButton: { marginTop: 10, alignItems: "center" },
-  closeText: { color: "#174A6A", fontWeight: "600" },
-  selectAllButton: { paddingVertical: 10, backgroundColor: "#E0F2FE", borderRadius: 8, alignItems: "center", marginBottom: 8 },
-  selectAllText: { fontWeight: "600", color: "#174A6A" },
-  snackbar: { position: "absolute", bottom: 30, left: 20, right: 20, backgroundColor: "#16A34A", padding: 12, borderRadius: 10, alignItems: "center", zIndex: 999, elevation: 10 },
-  snackbarText: { color: "#fff", fontWeight: "600" },
+  header: {
+    backgroundColor: "#174A6A",
+    paddingVertical: 24,
+    paddingTop: 40,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  headerTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+    marginLeft: 10,
+  },
+
+  page: { padding: 20, paddingBottom: 80 },
+
+  title: {
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: 10,
+    color: "#174A6A",
+  },
+
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+  },
+
+  gridBoxSmall: {
+    width: "15.5%",
+    aspectRatio: 1,
+    borderWidth: 1,
+    borderColor: "#174A6A",
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 10,
+    backgroundColor: "#fff",
+  },
+
+  activeGridBox: {
+    backgroundColor: "#174A6A",
+  },
+
+  boxLabel: {
+    fontSize: 9,
+    marginTop: 4,
+    textAlign: "center",
+    fontWeight: "600",
+  },
+
+  row: { flexDirection: "row" },
+
+  label: {
+    fontSize: 14,
+    fontWeight: "600",
+    marginBottom: 5,
+  },
+
+  input: {
+    borderWidth: 1,
+    borderColor: "#174A6A",
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: "#fff",
+  },
+
+  button: {
+    marginTop: 20,
+    backgroundColor: "#174A6A",
+    padding: 14,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+
+  buttonText: { color: "#fff", fontWeight: "700" },
+
+  snackbar: {
+    position: "absolute",
+    bottom: 25,
+    left: 20,
+    right: 20,
+    backgroundColor: "#16A34A",
+    padding: 12,
+    borderRadius: 10,
+  },
+
+  snackbarText: {
+    color: "#fff",
+    fontWeight: "700",
+    textAlign: "center",
+  },
 });
