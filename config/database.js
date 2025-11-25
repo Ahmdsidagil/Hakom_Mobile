@@ -1,9 +1,10 @@
 // ====================================
-// 📦 config/database.js (versi lengkap & rapi, unit aman)
+// 📦 config/database.js (versi lengkap & rapi + cache gambar fix kolom image)
 // ====================================
 import * as SQLite from "expo-sqlite";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
+import * as FileSystem from "expo-file-system/legacy";
 import api from "./api";
 
 let db;
@@ -21,14 +22,14 @@ export const initDatabase = async () => {
   if (!db.runAsync) {
     db.runAsync = (sql, params = []) =>
       new Promise((resolve, reject) => {
-        db.transaction(tx => {
+        db.transaction((tx) => {
           tx.executeSql(sql, params, (_, result) => resolve(result), (_, err) => reject(err));
         });
       });
 
     db.getAllAsync = (sql, params = []) =>
       new Promise((resolve, reject) => {
-        db.transaction(tx => {
+        db.transaction((tx) => {
           tx.executeSql(sql, params, (_, { rows }) => resolve(rows._array || []), (_, err) => reject(err));
         });
       });
@@ -52,11 +53,14 @@ export const initDatabase = async () => {
       name_commodity TEXT,
       category_id INTEGER,
       unit TEXT,
+      image TEXT,
+      local_image TEXT,
       FOREIGN KEY (category_id) REFERENCES categories(id)
     );`,
     `CREATE TABLE IF NOT EXISTS markets (
       id INTEGER PRIMARY KEY,
-      name_market TEXT
+      name_market TEXT,
+      address TEXT
     );`,
     `CREATE TABLE IF NOT EXISTS local_prices (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,24 +101,16 @@ export const initDatabase = async () => {
     await db.runAsync(query);
   }
 
-  // =========================
-  // ALTER TABLE untuk kolom baru jika belum ada
-  // =========================
-  const marketsInfo = await db.getAllAsync("PRAGMA table_info(markets);");
-  const hasAddress = marketsInfo.some(col => col.name === "address");
-  if (!hasAddress) {
-    await db.runAsync(`ALTER TABLE markets ADD COLUMN address TEXT;`);
-  }
-
   console.log("✅ Database & tabel lokal siap digunakan");
 
   // 🔄 Sinkron otomatis saat online (hanya sekali)
   if (!netListenerAdded) {
-    NetInfo.addEventListener(state => {
+    NetInfo.addEventListener((state) => {
       if (state.isConnected) {
         console.log("🌐 Koneksi aktif — mulai sinkronisasi otomatis...");
         if (typeof syncPricesToServer === "function") {
-          syncPricesToServer(true);
+          // panggil tanpa menunggu
+          syncPricesToServer().catch((e) => console.warn("Auto syncPricesToServer error:", e));
         }
       }
     });
@@ -131,7 +127,87 @@ export const getDatabase = async () => {
 };
 
 // ====================================
-// 🔹 Sinkronisasi Data dari Server (unit lengkap)
+// 🔹 Fungsi download gambar ke local
+// ====================================
+export const downloadImage = async (imageUrl, filename) => {
+  try {
+    if (!imageUrl) return null;
+    const localUri = `${FileSystem.documentDirectory}${filename}`;
+    try {
+      const fileInfo = await FileSystem.getInfoAsync(localUri);
+      if (!fileInfo.exists) {
+        // downloadAsync akan menimpa file jika ada, tapi kita cek dulu
+        await FileSystem.downloadAsync(imageUrl, localUri);
+      }
+      return localUri;
+    } catch (err) {
+      console.warn("⚠️ Gagal download gambar:", err);
+      return null;
+    }
+  } catch (err) {
+    console.warn("⚠️ downloadImage error:", err);
+    return null;
+  }
+};
+
+// ====================================
+// 🔹 Helper: dapatkan path lokal dari image URL (jika sudah didownload)
+// ====================================
+export const getLocalImagePath = async (imageUrl) => {
+  try {
+    if (!imageUrl) return null;
+    // filename derive dari URL terakhir
+    const parts = imageUrl.split("/");
+    const filename = parts[parts.length - 1] || `img_${Buffer.from(imageUrl).toString("base64")}.jpg`;
+    const localUri = `${FileSystem.documentDirectory}${filename}`;
+    const info = await FileSystem.getInfoAsync(localUri);
+    return info.exists ? localUri : null;
+  } catch (err) {
+    return null;
+  }
+};
+
+// ====================================
+// 🔹 Helper: cari commodity by name dan kembalikan kolom image/local_image
+// ====================================
+export const getImageForCommodityByName = async (name) => {
+  try {
+    if (!name) return null;
+    const db = await getDatabase();
+    const row = await db.getFirstAsync(`SELECT id, image, local_image FROM commodities WHERE name_commodity = ? LIMIT 1;`, [name]);
+    return row || null;
+  } catch (err) {
+    return null;
+  }
+};
+
+// ====================================
+// 🔹 Safe JSON parse helper untuk respon server dengan wrapper { data: [...] }
+// ====================================
+const safeParseResponseData = async (response) => {
+  try {
+    const text = await response.text();
+    // jika server kirim HTML (error), throw supaya caller tahu
+    const trimmed = text.trim();
+    if (trimmed.startsWith("<")) {
+      throw new Error("Response looks like HTML (not JSON)");
+    }
+
+    const parsed = JSON.parse(trimmed);
+    // jika ada wrapper data -> gunakan data, kalau tidak gunakan parsed langsung
+    if (parsed && (parsed.data || parsed.results || parsed.latest_prices)) {
+      // prefer 'data' then 'results' then 'latest_prices'
+      return parsed.data || parsed.results || parsed.latest_prices;
+    }
+    return parsed;
+  } catch (err) {
+    // bubble error with message so caller can report
+    throw err;
+  }
+};
+
+// ====================================
+// 🔹 Sinkronisasi Data dari Server (unit lengkap + cache gambar)
 // ====================================
 export const syncFromServer = async () => {
   try {
@@ -156,16 +232,12 @@ export const syncFromServer = async () => {
           results[ep.name] = null;
           continue;
         }
-
-        const text = await res.text();
-        try {
-          results[ep.name] = JSON.parse(text);
-        } catch (err) {
-          console.error(`❌ Gagal parse response ${ep.name}:`, text);
-          results[ep.name] = null;
-        }
+        // parse safely (meng-handle wrapper { data: [...] })
+        const parsed = await safeParseResponseData(res);
+        // parsed could be array or object -> normalize to array for our usage
+        results[ep.name] = Array.isArray(parsed) ? parsed : parsed?.data ?? parsed;
       } catch (err) {
-        console.error(`❌ Gagal fetch ${ep.name}:`, err);
+        console.error(`❌ Gagal fetch/parse ${ep.name}:`, err);
         results[ep.name] = null;
       }
     }
@@ -201,7 +273,7 @@ export const syncFromServer = async () => {
     }
 
     // =========================
-    // Simpan komoditas dengan mapping unit
+    // Simpan komoditas dengan mapping unit + download gambar
     // =========================
     if (results.commodities) {
       await db.runAsync("DELETE FROM commodities;");
@@ -211,7 +283,7 @@ export const syncFromServer = async () => {
         let unitName = "kg"; // default
 
         if (com.unit_id && results.units) {
-          const foundUnit = results.units.find(u => u.id === com.unit_id);
+          const foundUnit = results.units.find((u) => u.id === com.unit_id);
           if (foundUnit) unitName = foundUnit.name;
         } else if (com.unit?.name) {
           unitName = com.unit.name;
@@ -219,12 +291,26 @@ export const syncFromServer = async () => {
           unitName = com.unit;
         }
 
+        // simpan image url di kolom image
         await db.runAsync(
-          `INSERT INTO commodities (id, name_commodity, category_id, unit) VALUES (?, ?, ?, ?);`,
-          [com.id, com.name_commodity || "-", categoryId, unitName]
+          `INSERT INTO commodities (id, name_commodity, category_id, unit, image, local_image) VALUES (?, ?, ?, ?, ?, ?);`,
+          [com.id, com.name_commodity || "-", categoryId, unitName, com.image || null, null]
         );
+
+        // 🔹 Download gambar dan simpan path lokal (jika ada)
+        if (com.image) {
+          const parts = com.image.split("/");
+          const filename = parts[parts.length - 1] || `commodity_${com.id}.jpg`;
+          const localPath = await downloadImage(com.image, filename);
+          if (localPath) {
+            await db.runAsync(
+              `UPDATE commodities SET local_image = ? WHERE id = ?;`,
+              [localPath, com.id]
+            );
+          }
+        }
       }
-      console.log("✅ Data komoditas berhasil disimpan dengan unit");
+      console.log("✅ Data komoditas berhasil disimpan dengan unit & gambar lokal");
     }
 
     // =========================
@@ -244,6 +330,7 @@ export const syncFromServer = async () => {
     console.log("📡 Sinkronisasi selesai");
   } catch (err) {
     console.error("❌ Gagal sync data:", err);
+    throw err;
   }
 };
 
@@ -287,6 +374,8 @@ export const addPrice = async (commodityId, categoryId, price) => {
 
         console.log("✅ Data online tersimpan & masuk riwayat");
         return;
+      } else {
+        console.warn("⚠️ Respon server addPrice bukan OK:", res.status);
       }
     } catch (err) {
       console.warn("⚠️ Gagal kirim ke server:", err);
@@ -336,6 +425,8 @@ export const syncPricesToServer = async () => {
           });
 
           console.log(`✅ Data lokal ID ${item.id} tersinkron & masuk riwayat`);
+        } else {
+          console.warn("⚠️ syncPricesToServer: server returned", res.status);
         }
       } catch (err) {
         console.warn("⚠️ Gagal sinkron item ID", item.id, err);
@@ -397,11 +488,14 @@ export const getAllLocalPrices = async () => {
     SELECT 
       p.id, 
       c.name_category, 
+      co.id AS commodity_id,
       co.name_commodity AS name_commodity, 
       p.price, 
       p.unit, 
       p.synced, 
-      p.created_at AS tanggal
+      p.created_at AS tanggal,
+      co.local_image AS local_image,
+      co.image AS image
     FROM local_prices p
     JOIN categories c ON p.category_id = c.id
     JOIN commodities co ON p.commodity_id = co.id
@@ -449,7 +543,15 @@ export const getDashboardStats = async () => {
 export const getLatestPrices = async (limit = 20) => {
   const db = await getDatabase();
   return await db.getAllAsync(`
-    SELECT co.name_commodity, c.name_category, p.price, p.unit, p.created_at AS tanggal
+    SELECT 
+      co.id AS commodity_id,
+      co.name_commodity, 
+      c.name_category, 
+      p.price, 
+      p.unit, 
+      p.created_at AS tanggal,
+      co.local_image AS local_image,
+      co.image AS image
     FROM local_prices p
     JOIN commodities co ON p.commodity_id = co.id
     JOIN categories c ON p.category_id = c.id
@@ -463,12 +565,15 @@ export const getLocalPricesForScreen = async (categoryId = null, commodityId = n
   let query = `
     SELECT 
       p.id,
+      co.id AS commodity_id,
       co.name_commodity,
       c.name_category,
       p.price,
       p.unit,
       p.synced,
-      p.created_at AS tanggal
+      p.created_at AS tanggal,
+      co.local_image AS local_image,
+      co.image AS image
     FROM local_prices p
     JOIN categories c ON p.category_id = c.id
     JOIN commodities co ON p.commodity_id = co.id

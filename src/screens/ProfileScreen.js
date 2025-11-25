@@ -18,7 +18,8 @@ export default function ProfileScreen({ navigation }) {
     name: "",
     email: "",
     phone: "", // sementara hardcode
-    avatar: "https://cdn-icons-png.flaticon.com/512/4140/4140037.png",
+    image: "",
+    
   });
 
   useEffect(() => {
@@ -35,7 +36,8 @@ export default function ProfileScreen({ navigation }) {
             ...prev,
             name: data.user_name || "Petugas Pasar",
             email: data.user_email || "email@tidakdiketahui.com",
-            phone: data.user_phone || "081234567890"
+            phone: data.user_phone || "081234567890",
+            image: data.user_image || "https://cdn-icons-png.flaticon.com/512/4140/4140037.png",
           }));
         }
       } catch (err) {
@@ -77,7 +79,7 @@ export default function ProfileScreen({ navigation }) {
         {/* ===== HEADER ===== */}
         <View style={styles.header}>
           <View style={styles.avatarContainer}>
-            <Image source={{ uri: user.avatar }} style={styles.avatar} />
+            <Image source={{ uri: user.image }} style={styles.avatar} />
             <TouchableOpacity style={styles.editIcon}>
               <Ionicons name="pencil" size={18} color="#fff" />
             </TouchableOpacity>

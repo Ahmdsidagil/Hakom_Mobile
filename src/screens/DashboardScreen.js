@@ -21,9 +21,9 @@ import {
   syncPricesToServer,
   getAllRiwayatPendataan,
   getAllLocalPrices,
-  getDashboardStats,
-  getLatestPrices,
   countUniqueCommodities,
+  getLocalImagePath,
+  getImageForCommodityByName,
 } from "../../config/database";
 
 export default function DashboardScreen({ navigation }) {
@@ -35,7 +35,7 @@ export default function DashboardScreen({ navigation }) {
   });
   const [greeting, setGreeting] = useState("");
   const [isConnected, setIsConnected] = useState(true);
-  const [uniqueCount, setUniqueCount] = useState(0); // jumlah komoditas unik yang sudah diinput
+  const [uniqueCount, setUniqueCount] = useState(0);
 
   const formatTanggalItem = (tgl) => {
     if (!tgl) return "-";
@@ -58,41 +58,62 @@ export default function DashboardScreen({ navigation }) {
     return `Rp ${num.toLocaleString("id-ID")}`;
   };
 
+  const enrichItemsWithImages = async (items) => {
+    const enriched = [];
+    for (const it of items) {
+      const item = { ...it };
+      if (!item.local_image && !item.image && item.name_commodity) {
+        try {
+          const found = await getImageForCommodityByName(item.name_commodity);
+          if (found?.local_image) item.local_image = found.local_image;
+          else if (found?.image) item.image = found.image;
+        } catch {}
+      }
+      if (!item.local_image && item.image) {
+        try {
+          const local = await getLocalImagePath(item.image);
+          if (local) item.local_image = local;
+        } catch {}
+      }
+      enriched.push(item);
+    }
+    return enriched;
+  };
+
   const loadRiwayatPendataan = async () => {
     try {
       const riwayatOnline = await getAllRiwayatPendataan();
       const riwayatOffline = await getAllLocalPrices();
 
-      const offlineFormatted = riwayatOffline.map((item) => ({
-        ...item,
-      }));
+      const combined = [...riwayatOnline, ...riwayatOffline];
 
-      const onlineFormatted = riwayatOnline.map((item) => ({
-        ...item,
-      }));
+      const uniqueArray = combined.filter(
+        (item, index, self) =>
+          index ===
+          self.findIndex(
+            (x) =>
+              (x.server_id &&
+                item.server_id &&
+                x.server_id === item.server_id) ||
+              (!item.server_id &&
+                x.name_commodity === item.name_commodity &&
+                (x.tanggal || x.created_at) ===
+                  (item.tanggal || item.created_at))
+          )
+      );
 
-      const combined = [...onlineFormatted, ...offlineFormatted];
-
-      const map = new Map();
-      combined.forEach((item) => {
-        const key =
-          (item.commodity_id || item.name_commodity) +
-          "_" +
-          (item.created_at || item.tanggal || "");
-        if (!map.has(key)) {
-          map.set(key, item);
-        }
-      });
-
-      const uniqueArray = Array.from(map.values()).sort(
+      const sorted = uniqueArray.sort(
         (a, b) =>
           new Date(b.tanggal || b.created_at) -
           new Date(a.tanggal || a.created_at)
       );
 
+      const top10 = sorted.slice(0, 10);
+      const enriched = await enrichItemsWithImages(top10);
+
       setDashboardData((prev) => ({
         ...prev,
-        latest_prices: uniqueArray.slice(0, 10),
+        latest_prices: enriched,
       }));
     } catch (err) {
       console.error("❌ Gagal load riwayat pendataan:", err);
@@ -113,14 +134,12 @@ export default function DashboardScreen({ navigation }) {
     let unsubscribe;
     const setup = async () => {
       await initDatabase();
-
-      // load data awal
       await loadRiwayatPendataan();
       await loadUniqueCount();
 
-      unsubscribe = NetInfo.addEventListener((state) => {
-        setIsConnected(state.isConnected);
-      });
+      unsubscribe = NetInfo.addEventListener((state) =>
+        setIsConnected(state.isConnected)
+      );
 
       const token = await AsyncStorage.getItem("token");
 
@@ -141,7 +160,10 @@ export default function DashboardScreen({ navigation }) {
                 total_commodities: data.total_commodities || 0,
               };
               setUser(userData);
-              await AsyncStorage.setItem("user_info", JSON.stringify(userData));
+              await AsyncStorage.setItem(
+                "user_info",
+                JSON.stringify(userData)
+              );
             }
           } else {
             const stored = await AsyncStorage.getItem("user_info");
@@ -166,37 +188,17 @@ export default function DashboardScreen({ navigation }) {
     return () => unsubscribe && unsubscribe();
   }, []);
 
-  useEffect(() => {
-    const unsubscribe = NetInfo.addEventListener(async (state) => {
-      setIsConnected(state.isConnected);
-      if (state.isConnected) {
-        try {
-          console.log("🔄 Online kembali — mulai auto sync...");
-          await syncPricesToServer();
-          await loadRiwayatPendataan();
-          await loadUniqueCount();
-        } catch (err) {
-          console.error("❌ Auto-sync gagal:", err);
-        }
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
   const handleTambahData = () => {
     navigation.navigate("Input", {
       onAddPrice: async () => {
         await loadRiwayatPendataan();
-        await loadUniqueCount(); // update jumlah komoditas unik setelah input
+        await loadUniqueCount();
       },
     });
   };
 
   const handleNotifikasi = () => navigation.navigate("Notification");
 
-  // ===============================
-  // ADD TANGGAL DI BAWAH NAMA PASAR
-  // ===============================
   const tanggalSekarang = new Date().toLocaleDateString("id-ID", {
     weekday: "long",
     day: "numeric",
@@ -214,21 +216,12 @@ export default function DashboardScreen({ navigation }) {
           </View>
 
           <View style={styles.rightHeader}>
-            <View
-              style={[
-                styles.statusBadge,
-                { backgroundColor: isConnected ? "#10B981" : "#EF4444" },
-              ]}
-            >
-              <Text style={styles.statusText}>
-                {isConnected ? "Online" : "Offline"}
-              </Text>
-            </View>
-            <TouchableOpacity
-              onPress={handleNotifikasi}
-              style={{ marginLeft: 12 }}
-            >
-              <Ionicons name="notifications-outline" size={26} color="#fff" />
+            <TouchableOpacity onPress={handleNotifikasi}>
+              <Ionicons
+                name="notifications-outline"
+                size={26}
+                color="#fff"
+              />
             </TouchableOpacity>
           </View>
         </View>
@@ -240,16 +233,14 @@ export default function DashboardScreen({ navigation }) {
             <View>
               <Text style={styles.label}>Pasar</Text>
               <Text style={styles.value}>{user?.market_name}</Text>
-
-              {/* ⭐ TANGGAL DITAMBAHKAN DI SINI */}
-              <Text style={styles.dateBelowMarket}>{tanggalSekarang}</Text>
+              <Text style={styles.dateBelowMarket}>
+                {tanggalSekarang}
+              </Text>
             </View>
 
             <View>
               <Text style={styles.label}>Total Komoditas</Text>
               <Text style={styles.value}>{user?.total_commodities}</Text>
-
-              {/* NEW: Komoditas Sudah Diinput */}
               <Text style={styles.subLabel}>Komoditas Sudah Diinput</Text>
               <Text style={styles.uniqueValue}>{uniqueCount}</Text>
             </View>
@@ -261,22 +252,28 @@ export default function DashboardScreen({ navigation }) {
         </View>
 
         <Text style={styles.sectionTitle}>Pendataan Terakhir</Text>
+
         <ScrollView showsVerticalScrollIndicator={false}>
           {dashboardData?.latest_prices?.length > 0 ? (
             dashboardData.latest_prices.map((item, idx) => (
               <View
-                key={`${item.commodity_id || item.name_commodity}-${item.created_at || item.tanggal}-${idx}`}
+                key={`${item.server_id || item.name_commodity}-${idx}`}
                 style={styles.cardItem}
               >
                 <Image
-                  source={{
-                    uri: "https://cdn-icons-png.flaticon.com/512/1998/1998707.png",
-                  }}
+                  source={
+                    item.local_image
+                      ? { uri: item.local_image }
+                      : item.image
+                      ? { uri: item.image }
+                      : null
+                  }
                   style={styles.image}
                 />
+
                 <View style={styles.textContainer}>
                   <Text style={styles.itemName}>
-                    {item.name_commodity || item.nama || "-"}
+                    {item.name_commodity || "-"}
                   </Text>
                   <Text style={styles.itemPrice}>
                     {formatHarga(item.price)} / {item.unit || "-"}
@@ -284,8 +281,12 @@ export default function DashboardScreen({ navigation }) {
                   <Text style={styles.itemDate}>
                     {formatTanggalItem(item.tanggal || item.created_at)}
                   </Text>
+                </View>
+
+                {/* 🔥 KATEGORI DIPINDAH KE KANAN */}
+                <View style={styles.rightSection}>
                   <Text style={styles.itemCategory}>
-                    {item.name_category || item.kategori || "Lainnya"}
+                    {item.name_category || "Lainnya"}
                   </Text>
                 </View>
               </View>
@@ -303,16 +304,23 @@ export default function DashboardScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F3F4F6" },
-  header: { paddingTop: 50, paddingBottom: 40, paddingHorizontal: 20 },
+  header: {
+    paddingTop: 50,
+    paddingBottom: 40,
+    paddingHorizontal: 20,
+  },
   headerTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
   rightHeader: { flexDirection: "row", alignItems: "center" },
-  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
-  statusText: { color: "#fff", fontSize: 12, fontWeight: "600" },
-  greeting: { color: "#E0F2FE", fontSize: 16, fontWeight: "500" },
+
+  greeting: {
+    color: "#E0F2FE",
+    fontSize: 16,
+    fontWeight: "500",
+  },
   name: { color: "#FFFFFF", fontSize: 18, fontWeight: "700" },
 
   body: {
@@ -330,26 +338,15 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     padding: 16,
     marginBottom: 16,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
     elevation: 2,
-  },
-
-  dateBelowMarket: {
-    marginTop: 2,
-    color: "#6B7280",
-    fontSize: 12,
-    fontStyle: "italic",
   },
 
   rowBetween: { flexDirection: "row", justifyContent: "space-between" },
   label: { color: "#6B7280", fontSize: 13 },
   value: { color: "#111827", fontSize: 15, fontWeight: "600" },
-
-  // new styles for the unique count display
   subLabel: { color: "#6B7280", fontSize: 12, marginTop: 8 },
   uniqueValue: { color: "#111827", fontSize: 15, fontWeight: "700" },
+  dateBelowMarket: { fontSize: 12, color: "#6B7280", marginTop: 2 },
 
   btnTambah: {
     backgroundColor: "#174A6A",
@@ -359,35 +356,51 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   btnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+
   sectionTitle: {
     fontSize: 16,
     fontWeight: "700",
     color: "#111827",
     marginBottom: 12,
   },
+
   cardItem: {
     backgroundColor: "#FFFFFF",
     borderRadius: 10,
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 10,
-    padding: 10,
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
+    padding: 12,
     elevation: 1,
   },
-  image: { width: 55, height: 55, borderRadius: 10, marginRight: 12 },
+
+  image: {
+    width: 65,
+    height: 65,
+    borderRadius: 10,
+    marginRight: 12,
+  },
+
   textContainer: { flex: 1 },
+
+  rightSection: {
+    justifyContent: "center",
+    alignItems: "flex-end",
+    width: 80,
+  },
+
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "600" },
   itemDate: { fontSize: 12, color: "#6B7280" },
   itemCategory: {
     fontSize: 12,
-    color: "#9CA3AF",
-    marginTop: 2,
-    fontStyle: "italic",
+    fontWeight: "700", 
+    color: "#174A6A" 
   },
-  emptyText: { color: "#6B7280", textAlign: "center", marginTop: 20 },
+
+  emptyText: {
+    color: "#6B7280",
+    textAlign: "center",
+    marginTop: 20,
+  },
 });
- 

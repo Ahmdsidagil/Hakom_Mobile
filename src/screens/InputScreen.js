@@ -1,4 +1,4 @@
-// src/screens/InputScreen.js (Full Version With Perfect 6-Column Grid + Auto Format Rp)
+// src/screens/InputScreen.js (Full Version + Local Images for Categories)
 import React, { useEffect, useState, useRef } from "react";
 import {
   View,
@@ -11,6 +11,7 @@ import {
   Platform,
   Alert,
   Animated,
+  Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import NetInfo from "@react-native-community/netinfo";
@@ -20,6 +21,13 @@ import {
   getCommoditiesByCategory,
   addPrice,
 } from "../../config/database";
+
+// 🔥 LOCAL IMAGES FOR CATEGORIES
+const categoryImages = {
+  Sayurann: require("../assets/sayuran.jpg"),
+  Beras: require("../assets/beras.jpg"),
+  Bumbu: require("../assets/bumbu.jpg"),
+};
 
 export default function InputScreen({ navigation, route }) {
   const [categories, setCategories] = useState([]);
@@ -77,11 +85,8 @@ export default function InputScreen({ navigation, route }) {
     const exists = selectedCategories.some((c) => c.id === cat.id);
     let updated;
 
-    if (exists) {
-      updated = selectedCategories.filter((c) => c.id !== cat.id);
-    } else {
-      updated = [...selectedCategories, cat];
-    }
+    if (exists) updated = selectedCategories.filter((c) => c.id !== cat.id);
+    else updated = [...selectedCategories, cat];
 
     setSelectedCategories(updated);
 
@@ -99,9 +104,6 @@ export default function InputScreen({ navigation, route }) {
     setUnit(item.unit);
   };
 
-  // ============================
-  // 🔥 Format harga otomatis
-  // ============================
   const formatRupiah = (value) => {
     if (!value) return "";
     let numberString = value.replace(/[^,\d]/g, "");
@@ -114,7 +116,6 @@ export default function InputScreen({ navigation, route }) {
       const separator = sisa ? "." : "";
       rupiah += separator + ribuan.join(".");
     }
-
     return rupiah;
   };
 
@@ -162,9 +163,8 @@ export default function InputScreen({ navigation, route }) {
           : "📦 Disimpan offline, menunggu sinkron"
       );
 
-      setPrice("");
-      setSelectedCommodity(null);
-      setUnit("");
+      // 🔥 FIX: JANGAN RESET KOMODITAS / UNIT
+      setPrice(""); // hanya reset harga, komoditas tetap terpilih
 
       if (route?.params?.onAddPrice) route.params.onAddPrice();
     } catch (err) {
@@ -184,6 +184,7 @@ export default function InputScreen({ navigation, route }) {
       style={{ flex: 1, backgroundColor: "#fff" }}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
+      {/* HEADER */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 6 }}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
@@ -193,22 +194,29 @@ export default function InputScreen({ navigation, route }) {
       </View>
 
       <ScrollView ref={scrollRef} contentContainerStyle={styles.page}>
+        {/* TITLE KATEGORI */}
         <Text style={styles.title}>Pilih Kategori</Text>
 
+        {/* GRID KATEGORI */}
         <View style={styles.grid}>
           {categories.map((cat) => {
             const selected = selectedCategories.some((c) => c.id === cat.id);
+            const img = categoryImages[cat.name_category] || null;
+
             return (
               <TouchableOpacity
                 key={cat.id}
                 style={[styles.gridBoxSmall, selected && styles.activeGridBox]}
                 onPress={() => toggleCategory(cat)}
               >
-                <Ionicons
-                  name="apps-outline"
-                  size={24}
-                  color={selected ? "#fff" : "#174A6A"}
-                />
+                {img && (
+                  <Image
+                    source={img}
+                    style={{ width: 45, height: 45, borderRadius: 8 }}
+                    resizeMode="cover"
+                  />
+                )}
+
                 <Text
                   style={[
                     styles.boxLabel,
@@ -223,10 +231,10 @@ export default function InputScreen({ navigation, route }) {
           })}
         </View>
 
+        {/* KOMODITAS */}
         {selectedCategories.length > 0 && (
           <>
             <Text style={[styles.title, { marginTop: 15 }]}>Pilih Komoditas</Text>
-
             <View style={styles.grid}>
               {filteredCommodities.map((item) => {
                 const active = selectedCommodity?.id === item.id;
@@ -236,15 +244,26 @@ export default function InputScreen({ navigation, route }) {
                     style={[styles.gridBoxSmall, active && styles.activeGridBox]}
                     onPress={() => handleSelectCommodity(item)}
                   >
-                    <Ionicons
-                      name="leaf-outline"
-                      size={24}
-                      color={active ? "#fff" : "#0F5132"}
+                    <Image
+                      source={
+                        item.local_image
+                          ? { uri: item.local_image }
+                          : item.image
+                          ? { uri: item.image }
+                          : null
+                      }
+                      style={{
+                        width: 62,
+                        height: 56,
+                        borderRadius: 10,
+                        marginTop: 6,
+                      }}
+                      resizeMode="cover"
                     />
                     <Text
                       style={[
                         styles.boxLabel,
-                        { color: active ? "#fff" : "#0F5132" },
+                        { color: active ? "#fff" : "#174A6A", fontSize: 10 },
                       ]}
                       numberOfLines={2}
                     >
@@ -257,6 +276,7 @@ export default function InputScreen({ navigation, route }) {
           </>
         )}
 
+        {/* HARGA */}
         {selectedCommodity && (
           <View style={{ marginTop: 25 }}>
             <Text style={styles.title}>Harga & Satuan</Text>
@@ -272,11 +292,6 @@ export default function InputScreen({ navigation, route }) {
                   onChangeText={(text) => {
                     const cleaned = text.replace(/[^0-9]/g, "");
                     setPrice(formatRupiah(cleaned));
-                  }}
-                  onFocus={() => {
-                    setTimeout(() => {
-                      scrollRef.current?.scrollTo({ y: 650, animated: true });
-                    }, 200);
                   }}
                 />
               </View>
@@ -303,7 +318,7 @@ export default function InputScreen({ navigation, route }) {
           </View>
         )}
 
-        <View style={{ height: 120 }} />
+        <View style={{ height: 80 }} />
       </ScrollView>
 
       {snackbarMessage ? (
@@ -365,15 +380,16 @@ const styles = StyleSheet.create({
   },
 
   gridBoxSmall: {
-    width: "15.5%",
+    width: "23%",
     aspectRatio: 1,
     borderWidth: 1,
     borderColor: "#174A6A",
     borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 10,
+    marginBottom: 14,
     backgroundColor: "#fff",
+    padding: 6,
   },
 
   activeGridBox: {
@@ -381,8 +397,8 @@ const styles = StyleSheet.create({
   },
 
   boxLabel: {
-    fontSize: 9,
-    marginTop: 4,
+    fontSize: 11,
+    marginTop: 6,
     textAlign: "center",
     fontWeight: "600",
   },
@@ -392,7 +408,7 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 14,
     fontWeight: "600",
-    marginBottom: 5,
+    marginBottom: 4,
   },
 
   input: {

@@ -11,6 +11,7 @@ export default {
   UPDATE_PASSWORD: `${BASE_URL}/change-password`,
   GET_MARKET: `${BASE_URL}/markets`,
   UNIT: `${BASE_URL}/units`,
+  PRICE: `${BASE_URL}/prices`,
 };
 
 // Ambil data dashboard
