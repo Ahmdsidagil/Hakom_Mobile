@@ -38,15 +38,15 @@ const getSyncedPricesFromServer = async () => {
     });
     const data = await response.json();
 
-    if (data?.success && Array.isArray(data.prices)) {
-      return data.prices.map((item) => ({
-        id: item.id,
-        name_commodity: item.name_commodity,
+    if ( Array.isArray(data.data)) {
+      return data.data.map((item) => ({
+        id: item.id_price,
+        name_commodity: item.commodity_name,
         price: item.price,
-        name_unit: item.name_unit || "-",
-        tanggal: item.updated_at || new Date().toISOString(),
-        name_category: item.name_category || "Lainnya",
-        image: item.image_url || null,
+        name_unit: item.unit_name || "-",
+        tanggal: item.created_at || new Date().toISOString(),
+        name_category: item.category_name || "Lainnya",
+        image: item.image || null,
         synced: true,
       }));
     }
@@ -99,11 +99,11 @@ export default function DataLocalScreen({ navigation }) {
       setDataKomoditas(
         combined.map((item) => ({
           id: item.id,
-          nama: item.name_commodity,
+          nama: item.commodity_name || item.name_commodity,
           harga: `Rp ${parseInt(item.price || 0).toLocaleString("id-ID")}`,
-          satuan: item.unit || "-",
-          tanggal: item.tanggal || new Date().toISOString(),
-          kategori: item.name_category || "Lainnya",
+          satuan: item.unit_name || item.name_unit || "-",
+          tanggal: item.created_at || item.tanggal || new Date().toISOString(),
+          kategori: item.category_name || item.name_category || "Lainnya",
           image: item.image,
           local_image: item.local_image,
           status: item.synced ? "Tersinkron" : "Belum Tersinkron",
