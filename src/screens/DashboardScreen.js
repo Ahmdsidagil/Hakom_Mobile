@@ -157,7 +157,7 @@ export default function DashboardScreen({ navigation }) {
               const userData = {
                 user_name: data.user_name || "Petugas Pasar",
                 market_name: data.market_name || "Tidak diketahui",
-                total_commodities: data.total_commodities || 0,
+                total_commodities: data.total_commodities ?? 0,
               };
               setUser(userData);
               await AsyncStorage.setItem(
@@ -211,11 +211,24 @@ export default function DashboardScreen({ navigation }) {
       <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
         <View style={styles.headerTop}>
           <View>
-            <Text style={styles.greeting}>{greeting}!</Text>
-            <Text style={styles.name}>{user?.user_name}</Text>
+            <Text style={styles.greeting}>{greeting || ""}!</Text>
+            <Text style={styles.name}>{user?.user_name || ""}</Text>
           </View>
 
           <View style={styles.rightHeader}>
+            {/* 🟢 Indikator + teks Online/Offline */}
+            <View style={styles.statusContainer}>
+              <View
+                style={[
+                  styles.statusDot,
+                  { backgroundColor: isConnected ? "#22c55e" : "#ef4444" },
+                ]}
+              />
+              <Text style={styles.statusText}>
+                {isConnected ? "Online" : "Offline"}
+              </Text>
+            </View>
+
             <TouchableOpacity onPress={handleNotifikasi}>
               <Ionicons
                 name="notifications-outline"
@@ -232,17 +245,17 @@ export default function DashboardScreen({ navigation }) {
           <View style={styles.rowBetween}>
             <View>
               <Text style={styles.label}>Pasar</Text>
-              <Text style={styles.value}>{user?.market_name}</Text>
-              <Text style={styles.dateBelowMarket}>
-                {tanggalSekarang}
-              </Text>
+              <Text style={styles.value}>{user?.market_name || ""}</Text>
+              <Text style={styles.dateBelowMarket}>{tanggalSekarang}</Text>
             </View>
 
             <View>
               <Text style={styles.label}>Total Komoditas</Text>
-              <Text style={styles.value}>{user?.total_commodities}</Text>
+              <Text style={styles.value}>
+                {String(user?.total_commodities ?? 0)}
+              </Text>
               <Text style={styles.subLabel}>Komoditas Sudah Diinput</Text>
-              <Text style={styles.uniqueValue}>{uniqueCount}</Text>
+              <Text style={styles.uniqueValue}>{String(uniqueCount ?? 0)}</Text>
             </View>
           </View>
 
@@ -255,42 +268,44 @@ export default function DashboardScreen({ navigation }) {
 
         <ScrollView showsVerticalScrollIndicator={false}>
           {dashboardData?.latest_prices?.length > 0 ? (
-            dashboardData.latest_prices.map((item, idx) => (
-              <View
-                key={`${item.server_id || item.name_commodity}-${idx}`}
-                style={styles.cardItem}
-              >
-                <Image
-                  source={
-                    item.local_image
-                      ? { uri: item.local_image }
-                      : item.image
-                      ? { uri: item.image }
-                      : null
-                  }
-                  style={styles.image}
-                />
+            dashboardData.latest_prices
+              .filter((item) => item && typeof item === "object")
+              .map((item, idx) => (
+                <View
+                  key={`${item.server_id || item.name_commodity}-${idx}`}
+                  style={styles.cardItem}
+                >
+                  <Image
+                    source={
+                      item.local_image
+                        ? { uri: item.local_image }
+                        : item.image
+                        ? { uri: item.image }
+                        : null
+                    }
+                    style={styles.image}
+                  />
 
-                <View style={styles.textContainer}>
-                  <Text style={styles.itemName}>
-                    {item.name_commodity || "-"}
-                  </Text>
-                  <Text style={styles.itemPrice}>
-                    {formatHarga(item.price)} / {item.unit || "-"}
-                  </Text>
-                  <Text style={styles.itemDate}>
-                    {formatTanggalItem(item.tanggal || item.created_at)}
-                  </Text>
-                </View>
+                  <View style={styles.textContainer}>
+                    <Text style={styles.itemName}>
+                      {item.name_commodity || "-"}
+                    </Text>
+                    <Text style={styles.itemPrice}>
+                      {formatHarga(item.price)} / {item.unit || "-"}
+                    </Text>
+                    <Text style={styles.itemDate}>
+                      {formatTanggalItem(item.tanggal || item.created_at)}
+                    </Text>
+                  </View>
 
-                {/* 🔥 KATEGORI DIPINDAH KE KANAN */}
-                <View style={styles.rightSection}>
-                  <Text style={styles.itemCategory}>
-                    {item.name_category || "Lainnya"}
-                  </Text>
+                  {/* 🔥 KATEGORI DIPINDAH KE KANAN */}
+                  <View style={styles.rightSection}>
+                    <Text style={styles.itemCategory}>
+                      {item.name_category || "Lainnya"}
+                    </Text>
+                  </View>
                 </View>
-              </View>
-            ))
+              ))
           ) : (
             <Text style={styles.emptyText}>Belum ada pendataan terakhir</Text>
           )}
@@ -315,6 +330,28 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   rightHeader: { flexDirection: "row", alignItems: "center" },
+
+  // 🟢 Status Online/Offline
+  statusContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginRight: 12,
+  },
+
+  statusDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 6,
+    borderWidth: 1.5,
+    borderColor: "#fff",
+  },
+  statusText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "600",
+    marginRight: 6,
+  },
 
   greeting: {
     color: "#E0F2FE",
@@ -392,11 +429,7 @@ const styles = StyleSheet.create({
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "600" },
   itemDate: { fontSize: 12, color: "#6B7280" },
-  itemCategory: {
-    fontSize: 12,
-    fontWeight: "700", 
-    color: "#174A6A" 
-  },
+  itemCategory: { fontSize: 12, fontWeight: "700", color: "#174A6A" },
 
   emptyText: {
     color: "#6B7280",

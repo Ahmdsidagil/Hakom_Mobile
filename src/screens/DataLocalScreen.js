@@ -17,6 +17,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import NetInfo from "@react-native-community/netinfo";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { pushNotification } from "./NotificationScreen";
 
 import {
   getAllLocalPrices,
@@ -40,11 +41,11 @@ const getSyncedPricesFromServer = async () => {
     if (data?.success && Array.isArray(data.prices)) {
       return data.prices.map((item) => ({
         id: item.id,
-        name_commodity: item.name,
+        name_commodity: item.name_commodity,
         price: item.price,
-        unit: item.unit || "-",
+        name_unit: item.name_unit || "-",
         tanggal: item.updated_at || new Date().toISOString(),
-        name_category: item.category || "Lainnya",
+        name_category: item.name_category || "Lainnya",
         image: item.image_url || null,
         synced: true,
       }));
@@ -87,7 +88,12 @@ export default function DataLocalScreen({ navigation }) {
 
       const combined = [
         ...(Array.isArray(serverData) ? serverData : []),
-        ...localData.filter((ld) => !(Array.isArray(serverData) ? serverData : []).some((sd) => sd.id === ld.id)),
+        ...localData.filter(
+          (ld) =>
+            !(Array.isArray(serverData) ? serverData : []).some(
+              (sd) => sd.id === ld.id
+            )
+        ),
       ];
 
       setDataKomoditas(
@@ -113,7 +119,9 @@ export default function DataLocalScreen({ navigation }) {
     try {
       const state = await NetInfo.fetch();
       if (state.isConnected) {
-        try { await syncPricesToServer(); } catch {}
+        try {
+          await syncPricesToServer();
+        } catch {}
         await fetchData();
       }
     } catch (err) {
@@ -132,13 +140,24 @@ export default function DataLocalScreen({ navigation }) {
 
   // Format tanggal
   const formatTanggalHeader = () =>
-    selectedDate.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+    selectedDate.toLocaleDateString("id-ID", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
 
   const formatTanggalItem = (tgl) => {
     if (!tgl) return "-";
     const dateObj = new Date(tgl);
     if (isNaN(dateObj.getTime())) return "-";
-    return `${dateObj.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}, ${dateObj.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}`;
+    return `${dateObj.toLocaleDateString("id-ID", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    })}, ${dateObj.toLocaleTimeString("id-ID", {
+      hour: "2-digit",
+      minute: "2-digit",
+    })}`;
   };
 
   // Seleksi item
@@ -173,13 +192,29 @@ export default function DataLocalScreen({ navigation }) {
             for (const id of selectedItems) {
               const itemData = dataKomoditas.find((i) => i.id === id);
               if (itemData) await deleteLocalPrice(id, itemData);
+
+              // 🔥 PUSH NOTIFIKASI HAPUS
+              await pushNotification({
+                type: "warning",
+                title: "Data Dihapus",
+                message: `${itemData.nama} telah dihapus`,
+              });
             }
-            setDataKomoditas((prev) => prev.filter((i) => !selectedItems.includes(i.id)));
+            setDataKomoditas((prev) =>
+              prev.filter((i) => !selectedItems.includes(i.id))
+            );
             setSelectedItems([]);
             setIsSelectionMode(false);
             Alert.alert("✅ Sukses", "Data berhasil dihapus.");
           } catch (error) {
             console.error("❌ Gagal hapus data:", error);
+
+            // 🔥 PUSH NOTIFIKASI ERROR HAPUS
+            await pushNotification({
+              type: "error",
+              title: "Hapus Gagal",
+              message: "Terjadi kesalahan saat menghapus data",
+            });
           }
         },
       },
@@ -191,7 +226,9 @@ export default function DataLocalScreen({ navigation }) {
     const itemDate = new Date(item.tanggal).toISOString().split("T")[0];
     const selectedDateString = selectedDate.toISOString().split("T")[0];
     const matchDate = itemDate === selectedDateString;
-    const matchSearch = item.nama?.toLowerCase().includes(search.toLowerCase().trim());
+    const matchSearch = item.nama
+      ?.toLowerCase()
+      .includes(search.toLowerCase().trim());
     const matchCategory = selectedTab === "Semua" || item.kategori === selectedTab;
     return matchDate && matchSearch && matchCategory;
   });
@@ -199,7 +236,10 @@ export default function DataLocalScreen({ navigation }) {
   return (
     <View style={styles.container}>
       {/* HEADER */}
-      <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
+      <LinearGradient
+        colors={["#174A6A", "#0B3B53"]}
+        style={styles.header}
+      >
         <View style={styles.headerTop}>
           <Text style={styles.headerTitle}>Data Komoditas Lokal</Text>
           <TouchableOpacity onPress={() => setMenuVisible(true)}>
@@ -221,17 +261,34 @@ export default function DataLocalScreen({ navigation }) {
         )}
 
         {/* Menu */}
-        <Modal transparent visible={menuVisible} animationType="fade" onRequestClose={() => setMenuVisible(false)}>
-          <TouchableOpacity style={styles.overlay} activeOpacity={1} onPressOut={() => setMenuVisible(false)}>
+        <Modal
+          transparent
+          visible={menuVisible}
+          animationType="fade"
+          onRequestClose={() => setMenuVisible(false)}
+        >
+          <TouchableOpacity
+            style={styles.overlay}
+            activeOpacity={1}
+            onPressOut={() => setMenuVisible(false)}
+          >
             <View style={styles.menuContainer}>
-              <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); navigation.navigate("Riwayat"); }}>
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => {
+                  setMenuVisible(false);
+                  navigation.navigate("Riwayat");
+                }}
+              >
                 <Ionicons name="time-outline" size={18} color="#fff" />
                 <Text style={styles.menuText}>Lihat Riwayat</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.menuItem} onPress={handleSelectAll}>
                 <Ionicons name="checkmark-done-outline" size={18} color="#fff" />
                 <Text style={styles.menuText}>
-                  {selectedItems.length === dataKomoditas.length ? "Batal Pilih Semua" : "Pilih Semua"}
+                  {selectedItems.length === dataKomoditas.length
+                    ? "Batal Pilih Semua"
+                    : "Pilih Semua"}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -241,12 +298,21 @@ export default function DataLocalScreen({ navigation }) {
         {/* Search */}
         <View style={styles.searchContainer}>
           <Ionicons name="search" size={18} color="#6B7280" />
-          <TextInput placeholder="Cari komoditas..." value={search} onChangeText={setSearch} placeholderTextColor="#9CA3AF" style={styles.searchInput} />
+          <TextInput
+            placeholder="Cari komoditas..."
+            value={search}
+            onChangeText={setSearch}
+            placeholderTextColor="#9CA3AF"
+            style={styles.searchInput}
+          />
         </View>
 
         {/* Filter Row */}
         <View style={styles.filterRow}>
-          <TouchableOpacity style={styles.filterBox} onPress={() => setShowDatePicker(true)}>
+          <TouchableOpacity
+            style={styles.filterBox}
+            onPress={() => setShowDatePicker(true)}
+          >
             <Ionicons name="calendar-outline" size={16} color="#174A6A" />
             <Text style={styles.filterText}>{formatTanggalHeader()}</Text>
           </TouchableOpacity>
@@ -260,8 +326,19 @@ export default function DataLocalScreen({ navigation }) {
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View style={styles.tabRow}>
             {kategori.map((item, index) => (
-              <TouchableOpacity key={`${item}-${index}`} style={[styles.tabItem, selectedTab === item && styles.tabActive]} onPress={() => setSelectedTab(item)}>
-                <Text style={[styles.tabText, selectedTab === item && styles.tabTextActive]}>{item}</Text>
+              <TouchableOpacity
+                key={`${item}-${index}`}
+                style={[styles.tabItem, selectedTab === item && styles.tabActive]}
+                onPress={() => setSelectedTab(item)}
+              >
+                <Text
+                  style={[
+                    styles.tabText,
+                    selectedTab === item && styles.tabTextActive,
+                  ]}
+                >
+                  {item}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -269,34 +346,89 @@ export default function DataLocalScreen({ navigation }) {
       </LinearGradient>
 
       {/* List */}
-      <ScrollView style={styles.listContainer} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 160 }}>
-        {filteredData.length > 0 ? filteredData.map((item) => {
-          const selected = selectedItems.includes(item.id);
-          return (
-            <TouchableOpacity key={item.id} style={styles.card} onPress={() => isSelectionMode && toggleSelectItem(item.id)} onLongPress={() => { setIsSelectionMode(true); toggleSelectItem(item.id); }}>
-              {!isSelectionMode && (
-                <TouchableOpacity style={styles.editIcon} onPress={() => navigation.navigate("EditData", { item })}>
-                  <Ionicons name="create-outline" size={14} color="#174A6A" />
-                </TouchableOpacity>
-              )}
-              <Image
-                source={item.image ? { uri: item.image } : item.local_image ? { uri: item.local_image } : placeholderImg}
-                style={{ width: 64, height: 64, borderRadius: 10, marginEnd: 8 }}
-                resizeMode="cover"
-              />
-              <View style={styles.leftSection}>
-                <Text style={styles.itemName}>{item.nama}</Text>
-                <Text style={styles.itemPrice}>{item.harga} / {item.satuan}</Text>
-                <Text style={styles.itemDate}>{formatTanggalItem(item.tanggal)}</Text>
-              </View>
-              <View style={styles.rightSection}>
-                <Text style={styles.itemCategory}>{item.kategori}</Text>
-                <Text style={[styles.statusText, { color: item.status === "Tersinkron" ? "#16A34A" : "#DC2626" }]}>{item.status}</Text>
-              </View>
-              {selected && <Ionicons name="checkmark-circle" size={22} color="#16A34A" style={{ alignSelf: "center", marginLeft: 8 }} />}
-            </TouchableOpacity>
-          );
-        }) : <Text style={styles.emptyText}>Tidak ada data ditemukan</Text>}
+      <ScrollView
+        style={styles.listContainer}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 160 }}
+      >
+        {filteredData.length > 0 ? (
+          filteredData.map((item) => {
+            const selected = selectedItems.includes(item.id);
+            return (
+              <TouchableOpacity
+                key={item.id}
+                style={styles.card}
+                onPress={() => isSelectionMode && toggleSelectItem(item.id)}
+                onLongPress={() => {
+                  setIsSelectionMode(true);
+                  toggleSelectItem(item.id);
+                }}
+              >
+                {!isSelectionMode && (
+                  <TouchableOpacity
+                    style={styles.editIcon}
+                    onPress={async () => {
+                      navigation.navigate("EditData", {
+                        item,
+                        onEditSuccess: async (updatedItem) => {
+                          await pushNotification({
+                            type: "success",
+                            title: "Data Diperbarui",
+                            message: `${updatedItem.nama} berhasil diperbarui`,
+                          });
+                        },
+                      });
+                    }}
+                  >
+                    <Ionicons name="create-outline" size={14} color="#174A6A" />
+                  </TouchableOpacity>
+                )}
+                <Image
+                  source={
+                    item.image
+                      ? { uri: item.image }
+                      : item.local_image
+                      ? { uri: item.local_image }
+                      : null
+                  }
+                  style={{ width: 64, height: 64, borderRadius: 10, marginEnd: 8 }}
+                  resizeMode="cover"
+                />
+                <View style={styles.leftSection}>
+                  <Text style={styles.itemName}>{item.nama}</Text>
+                  <Text style={styles.itemPrice}>
+                    {item.harga} / {item.satuan}
+                  </Text>
+                  <Text style={styles.itemDate}>{formatTanggalItem(item.tanggal)}</Text>
+                </View>
+                <View style={styles.rightSection}>
+                  <Text style={styles.itemCategory}>{item.kategori}</Text>
+                  <Text
+                    style={[
+                      styles.statusText,
+                      {
+                        color:
+                          item.status === "Tersinkron" ? "#16A34A" : "#DC2626",
+                      },
+                    ]}
+                  >
+                    {item.status}
+                  </Text>
+                </View>
+                {selected && (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={22}
+                    color="#16A34A"
+                    style={{ alignSelf: "center", marginLeft: 8 }}
+                  />
+                )}
+              </TouchableOpacity>
+            );
+          })
+        ) : (
+          <Text style={styles.emptyText}>Tidak ada data ditemukan</Text>
+        )}
       </ScrollView>
 
       {/* Delete Button */}
@@ -309,7 +441,10 @@ export default function DataLocalScreen({ navigation }) {
 
       {/* Bottom Nav */}
       <View style={styles.bottomNav}>
-        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate("Dashboard")}>
+        <TouchableOpacity
+          style={styles.navItem}
+          onPress={() => navigation.navigate("Dashboard")}
+        >
           <Ionicons name="home-outline" size={24} color="#6B7280" />
           <Text style={styles.navText}>Beranda</Text>
         </TouchableOpacity>
@@ -317,7 +452,10 @@ export default function DataLocalScreen({ navigation }) {
           <Ionicons name="folder" size={24} color="#174A6A" />
           <Text style={[styles.navText, styles.navTextActive]}>Data Lokal</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate("Profile")}>
+        <TouchableOpacity
+          style={styles.navItem}
+          onPress={() => navigation.navigate("Profile")}
+        >
           <Ionicons name="person-outline" size={24} color="#6B7280" />
           <Text style={styles.navText}>Profil</Text>
         </TouchableOpacity>
@@ -329,7 +467,13 @@ export default function DataLocalScreen({ navigation }) {
 // ===== STYLES =====
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },
-  header: { paddingTop: 50, paddingHorizontal: 16, paddingBottom: 16, borderBottomLeftRadius: 20, borderBottomRightRadius: 20 },
+  header: {
+    paddingTop: 50,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+  },
   headerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
   overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.2)", alignItems: "flex-end" },

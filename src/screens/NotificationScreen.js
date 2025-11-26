@@ -1,138 +1,212 @@
-import React from "react";
+// src/screens/NotificationScreen.js
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
-  FlatList,
   StyleSheet,
+  ScrollView,
   TouchableOpacity,
-  Image,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useNotification } from "../context/NotificationContext";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+// ======================
+// Global real-time handler
+// ======================
+let notificationListeners = [];
 
 /**
- * Layar notifikasi – selalu aktif
+ * Push notifikasi baru
+ * type: "success" | "error" | "info"
+ * title: string
+ * message: string
  */
-export default function NotificationScreen({ navigation }) {
-  const { notifications } = useNotification();
+export const pushNotification = async ({ type, title, message }) => {
+  try {
+    const stored = await AsyncStorage.getItem("notifications");
+    const notifList = stored ? JSON.parse(stored) : [];
 
-  const renderNotification = ({ item }) => (
-    <View style={styles.notificationItem}>
-      <Ionicons name="notifications" size={24} color="#174A6A" />
-      <View style={{ marginLeft: 10, flex: 1 }}>
-        <Text style={styles.notifTitle}>{item.title}</Text>
-        <Text style={styles.notifDesc}>{item.description}</Text>
-      </View>
-    </View>
-  );
+    const newNotif = {
+      id: Date.now(),
+      type,
+      title,
+      message,
+      timestamp: new Date().toISOString(),
+    };
+
+    const updatedList = [newNotif, ...notifList];
+    await AsyncStorage.setItem("notifications", JSON.stringify(updatedList));
+
+    // 🔹 Update semua listener global (realtime)
+    notificationListeners.forEach((fn) => fn(updatedList));
+  } catch (err) {
+    console.error("❌ Gagal push notifikasi:", err);
+  }
+};
+
+// ======================
+// NotificationScreen
+// ======================
+export default function NotificationScreen({ navigation }) {
+  const [notifications, setNotifications] = useState([]);
+
+  // Load notifikasi awal dari AsyncStorage
+  const loadNotifications = async () => {
+    try {
+      const stored = await AsyncStorage.getItem("notifications");
+      if (stored) setNotifications(JSON.parse(stored));
+    } catch (err) {
+      console.error("❌ Gagal load notifications:", err);
+    }
+  };
+
+  useEffect(() => {
+    loadNotifications();
+
+    // Daftarkan listener realtime
+    const listener = (newList) => setNotifications(newList);
+    notificationListeners.push(listener);
+
+    return () => {
+      // Hapus listener saat unmount
+      notificationListeners = notificationListeners.filter((fn) => fn !== listener);
+    };
+  }, []);
+
+  const getIcon = (type) => {
+    switch (type) {
+      case "success":
+        return <Ionicons name="checkmark-circle-outline" size={24} color="#22c55e" />;
+      case "error":
+        return <Ionicons name="close-circle-outline" size={24} color="#ef4444" />;
+      case "info":
+        return <Ionicons name="information-circle-outline" size={24} color="#3b82f6" />;
+      default:
+        return <Ionicons name="notifications-outline" size={24} color="#6b7280" />;
+    }
+  };
+
+  // Hapus notifikasi
+  const handleDelete = (id) => {
+    Alert.alert(
+      "Hapus Notifikasi",
+      "Apakah Anda yakin ingin menghapus notifikasi ini?",
+      [
+        { text: "Batal", style: "cancel" },
+        {
+          text: "Hapus",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              // Ambil data dari AsyncStorage agar konsisten
+              const stored = await AsyncStorage.getItem("notifications");
+              const notifList = stored ? JSON.parse(stored) : [];
+              const updated = notifList.filter((n) => n.id !== id);
+
+              await AsyncStorage.setItem("notifications", JSON.stringify(updated));
+
+              // 🔹 Update state lokal
+              setNotifications(updated);
+
+              // 🔹 Update listener global agar sinkron di seluruh app
+              notificationListeners.forEach((fn) => fn(updated));
+            } catch (err) {
+              console.error("❌ Gagal hapus notifikasi:", err);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   return (
     <View style={styles.container}>
-      {/* 🔹 Header */}
+      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-        >
-          <Ionicons name="arrow-back" size={24} color="#fff" />
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Ionicons name="arrow-back" size={26} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Notifikasi</Text>
-        <View style={{ width: 24 }} />
+        <View style={{ width: 26 }} /> {/* placeholder */}
       </View>
 
-      {/* 🔹 Konten */}
-      {notifications.length === 0 ? (
-        // 📭 Tidak ada notifikasi
-        <View style={styles.emptyContainer}>
-          <Image
-            source={{
-              uri: "https://cdn-icons-png.flaticon.com/512/4076/4076503.png",
-            }}
-            style={styles.emptyImage}
-          />
-          <Text style={styles.emptyTitle}>Belum ada pemberitahuan</Text>
-          <Text style={styles.emptySubtitle}>
-            Kembali ke sini untuk mendapatkan informasi terbaru tentang status
-            data Anda.
-          </Text>
-        </View>
-      ) : (
-        // 🔔 Daftar notifikasi
-        <FlatList
-          data={notifications}
-          keyExtractor={(item) => item.id.toString()}
-          renderItem={renderNotification}
-          contentContainerStyle={{ paddingBottom: 20 }}
-        />
-      )}
+      {/* Body */}
+      <ScrollView style={styles.body} showsVerticalScrollIndicator={false}>
+        {notifications.length > 0 ? (
+          notifications.map((notif) => (
+            <View
+              key={notif.id}
+              style={[
+                styles.notifCard,
+                notif.type === "error" && { borderLeftColor: "#ef4444" },
+                notif.type === "info" && { borderLeftColor: "#3b82f6" },
+              ]}
+            >
+              <View style={styles.icon}>{getIcon(notif.type)}</View>
+              <View style={styles.textContainer}>
+                <Text style={styles.notifTitle}>{notif.title || ""}</Text>
+                <Text style={styles.notifMessage}>{notif.message || ""}</Text>
+                <Text style={styles.notifTime}>
+                  {notif.timestamp ? new Date(notif.timestamp).toLocaleString("id-ID") : ""}
+                </Text>
+              </View>
+
+              {/* Tombol hapus */}
+              <TouchableOpacity
+                style={styles.deleteBtn}
+                onPress={() => handleDelete(notif.id)}
+              >
+                <Ionicons name="trash-outline" size={20} color="#ef4444" />
+              </TouchableOpacity>
+            </View>
+          ))
+        ) : (
+          <Text style={styles.emptyText}>Belum ada notifikasi</Text>
+        )}
+      </ScrollView>
     </View>
   );
 }
 
+// ======================
+// Styles
+// ======================
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#FFFFFF",
-  },
+  container: { flex: 1, backgroundColor: "#F3F4F6" },
   header: {
-    backgroundColor: "#0c3b57",
     flexDirection: "row",
     alignItems: "center",
+    paddingTop: 50,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
+    backgroundColor: "#174A6A",
     justifyContent: "space-between",
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
   },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#fff",
-    marginTop:24,
-  },
-  backButton: {
-    padding: 12,
-    marginTop: 24,
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 30,
-  },
-  emptyImage: {
-    width: 100,
-    height: 100,
-    marginBottom: 20,
-    opacity: 0.8,
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#111827",
-    marginBottom: 8,
-    textTransform: "capitalize",
-  },
-  emptySubtitle: {
-    fontSize: 13,
-    textAlign: "center",
-    color: "#6B7280",
-  },
-  notificationItem: {
+  headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
+  body: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
+  notifCard: {
     flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#F9FAFB",
-    padding: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: "#E5E7EB",
+    alignItems: "flex-start",
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+    elevation: 1,
+    borderLeftWidth: 5,
+    borderLeftColor: "#22c55e",
+    position: "relative",
   },
-  notifTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#111827",
+  icon: { marginRight: 10, marginTop: 2 },
+  textContainer: { flex: 1 },
+  notifTitle: { fontSize: 14, fontWeight: "700", color: "#111827" },
+  notifMessage: { fontSize: 13, color: "#6B7280", marginTop: 2 },
+  notifTime: { fontSize: 11, color: "#9CA3AF", marginTop: 4 },
+  deleteBtn: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    padding: 4,
   },
-  notifDesc: {
-    fontSize: 12,
-    color: "#6B7280",
-  },
+  emptyText: { textAlign: "center", marginTop: 20, color: "#6B7280" },
 });
