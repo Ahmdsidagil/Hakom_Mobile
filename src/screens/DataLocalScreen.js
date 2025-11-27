@@ -22,12 +22,66 @@ import { pushNotification } from "./NotificationScreen";
 import {
   getAllLocalPrices,
   deleteLocalPrice,
-  getDatabase,
   syncPricesToServer,
+  getDatabase,
 } from "../../config/database";
 
+// ========================
+// 🔥 MERGE TANPA DUPLIKASI
+// ========================
+const mergeServerAndLocal = (serverRows, localRows) => {
+  const merged = [];
+  const usedLocal = new Set();
 
-// Fungsi ambil data server
+  const isCloseTime = (t1, t2) => {
+    try {
+      const a = new Date(t1).getTime();
+      const b = new Date(t2).getTime();
+      return Math.abs(a - b) <= 180000; // 3 menit toleransi
+    } catch {
+      return false;
+    }
+  };
+
+  for (const s of serverRows) {
+    let matchedLocal = null;
+
+    for (const l of localRows) {
+      if (usedLocal.has(l)) continue;
+
+      if (s.commodity_id && l.commodity_id && s.commodity_id === l.commodity_id) {
+        matchedLocal = l;
+        break;
+      }
+
+      if (
+        (s.name_commodity ?? "").trim().toLowerCase() ===
+        (l.name_commodity ?? "").trim().toLowerCase() &&
+        Number(s.price) === Number(l.price) &&
+        isCloseTime(s.created_at, l.created_at)
+      ) {
+        matchedLocal = l;
+        break;
+      }
+    }
+
+    if (matchedLocal) usedLocal.add(matchedLocal);
+
+    merged.push(s); // server tetap dipakai
+  }
+
+  // Tambahkan lokal yang belum dipakai
+  for (const l of localRows) {
+    if (!usedLocal.has(l)) merged.push(l);
+  }
+
+  // Urutkan final
+  merged.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  return merged;
+};
+
+// Fetch Server
 const getSyncedPricesFromServer = async () => {
   try {
     const token = await AsyncStorage.getItem("token");
@@ -36,21 +90,21 @@ const getSyncedPricesFromServer = async () => {
     const response = await fetch("http://103.100.27.57:5100/api/prices", {
       headers: { Authorization: `Bearer ${token}` },
     });
-    const data = await response.json();
 
-    if ( Array.isArray(data.data)) {
-      return data.data.map((item) => ({
-        id: item.id_price,
-        name_commodity: item.commodity_name,
-        price: item.price,
-        name_unit: item.unit_name || "-",
-        tanggal: item.created_at || new Date().toISOString(),
-        name_category: item.category_name || "Lainnya",
-        image: item.image || null,
-        synced: true,
-      }));
-    }
-    return [];
+    const json = await response.json();
+    const data = Array.isArray(json.data) ? json.data : [];
+
+    return data.map((item) => ({
+      id_price: item.id_price,
+      commodity_id: item.id_commodity || item.commodity_id,
+      name_commodity: item.name_commodity,
+      price: item.price,
+      name_unit: item.name_unit || "-",
+      created_at: item.created_at,
+      name_category: item.name_category || "Lainnya",
+      image: item.image,
+      synced: true,
+    }));
   } catch (err) {
     console.error("❌ Gagal ambil data server:", err);
     return [];
@@ -73,37 +127,30 @@ export default function DataLocalScreen({ navigation }) {
     try {
       const db = await getDatabase();
       const result = await db.getAllAsync("SELECT * FROM categories;");
-      const kategoriNames = result.map((c) => c.name_category);
-      setKategori(["Semua", ...kategoriNames]);
-    } catch (error) {
-      console.error("❌ Gagal ambil kategori:", error);
+      const names = result.map((c) => c.name_category);
+      setKategori(["Semua", ...names]);
+    } catch (e) {
+      console.error("❌ Gagal ambil kategori:", e);
     }
   };
 
-  // Ambil data lokal + server
+  // Ambil dan merge data
   const fetchData = async () => {
     try {
-      const localData = await getAllLocalPrices();
-      const serverData = await getSyncedPricesFromServer();
+      const local = await getAllLocalPrices();
+      const server = await getSyncedPricesFromServer();
 
-      const combined = [
-        ...(Array.isArray(serverData) ? serverData : []),
-        ...localData.filter(
-          (ld) =>
-            !(Array.isArray(serverData) ? serverData : []).some(
-              (sd) => sd.id === ld.id
-            )
-        ),
-      ];
+      const merged = mergeServerAndLocal(server, local);
 
       setDataKomoditas(
-        combined.map((item) => ({
-          id: item.id,
-          nama: item.commodity_name || item.name_commodity,
-          harga: `Rp ${parseInt(item.price || 0).toLocaleString("id-ID")}`,
-          satuan: item.unit_name || item.name_unit || "-",
-          tanggal: item.created_at || item.tanggal || new Date().toISOString(),
-          kategori: item.category_name || item.name_category || "Lainnya",
+        merged.map((item) => ({
+          id: item.id_price || item.id,
+          commodity_id: item.commodity_id,
+          nama: item.name_commodity,
+          harga: `Rp ${parseInt(item.price).toLocaleString("id-ID")}`,
+          satuan: item.unit || item.name_unit,
+          tanggal: item.created_at,
+          kategori: item.name_category,
           image: item.image,
           local_image: item.local_image,
           status: item.synced ? "Tersinkron" : "Belum Tersinkron",
@@ -114,18 +161,14 @@ export default function DataLocalScreen({ navigation }) {
     }
   };
 
-  // Auto-sync server
+  // Auto Sync
   const autoSync = async () => {
-    try {
-      const state = await NetInfo.fetch();
-      if (state.isConnected) {
-        try {
-          await syncPricesToServer();
-        } catch {}
-        await fetchData();
-      }
-    } catch (err) {
-      console.error("❌ Gagal auto sync:", err);
+    const state = await NetInfo.fetch();
+    if (state.isConnected) {
+      try {
+        await syncPricesToServer();
+      } catch {}
+      await fetchData();
     }
   };
 
@@ -133,12 +176,12 @@ export default function DataLocalScreen({ navigation }) {
     useCallback(() => {
       fetchCategories();
       fetchData();
-      const unsubscribe = NetInfo.addEventListener(() => autoSync());
-      return () => unsubscribe();
+      const unsub = NetInfo.addEventListener(() => autoSync());
+      return () => unsub();
     }, [])
   );
 
-  // Format tanggal
+  // Format
   const formatTanggalHeader = () =>
     selectedDate.toLocaleDateString("id-ID", {
       day: "numeric",
@@ -148,22 +191,22 @@ export default function DataLocalScreen({ navigation }) {
 
   const formatTanggalItem = (tgl) => {
     if (!tgl) return "-";
-    const dateObj = new Date(tgl);
-    if (isNaN(dateObj.getTime())) return "-";
-    return `${dateObj.toLocaleDateString("id-ID", {
+    const d = new Date(tgl);
+    if (isNaN(d)) return "-";
+    return `${d.toLocaleDateString("id-ID", {
       day: "2-digit",
       month: "short",
       year: "numeric",
-    })}, ${dateObj.toLocaleTimeString("id-ID", {
+    })}, ${d.toLocaleTimeString("id-ID", {
       hour: "2-digit",
       minute: "2-digit",
     })}`;
   };
 
-  // Seleksi item
+  // Pilih data
   const toggleSelectItem = (id) => {
     const updated = selectedItems.includes(id)
-      ? selectedItems.filter((itemId) => itemId !== id)
+      ? selectedItems.filter((x) => x !== id)
       : [...selectedItems, id];
     setSelectedItems(updated);
     setIsSelectionMode(updated.length > 0);
@@ -174,7 +217,7 @@ export default function DataLocalScreen({ navigation }) {
       setSelectedItems([]);
       setIsSelectionMode(false);
     } else {
-      setSelectedItems(dataKomoditas.map((item) => item.id));
+      setSelectedItems(dataKomoditas.map((i) => i.id));
       setIsSelectionMode(true);
     }
     setMenuVisible(false);
@@ -190,14 +233,12 @@ export default function DataLocalScreen({ navigation }) {
         onPress: async () => {
           try {
             for (const id of selectedItems) {
-              const itemData = dataKomoditas.find((i) => i.id === id);
-              if (itemData) await deleteLocalPrice(id, itemData);
-
-              // 🔥 PUSH NOTIFIKASI HAPUS
+              const item = dataKomoditas.find((i) => i.id === id);
+              if (item) await deleteLocalPrice(id, item);
               await pushNotification({
                 type: "warning",
                 title: "Data Dihapus",
-                message: `${itemData.nama} telah dihapus`,
+                message: `${item.nama} telah dihapus`,
               });
             }
             setDataKomoditas((prev) =>
@@ -205,16 +246,8 @@ export default function DataLocalScreen({ navigation }) {
             );
             setSelectedItems([]);
             setIsSelectionMode(false);
-            Alert.alert("✅ Sukses", "Data berhasil dihapus.");
           } catch (error) {
             console.error("❌ Gagal hapus data:", error);
-
-            // 🔥 PUSH NOTIFIKASI ERROR HAPUS
-            await pushNotification({
-              type: "error",
-              title: "Hapus Gagal",
-              message: "Terjadi kesalahan saat menghapus data",
-            });
           }
         },
       },
@@ -229,17 +262,16 @@ export default function DataLocalScreen({ navigation }) {
     const matchSearch = item.nama
       ?.toLowerCase()
       .includes(search.toLowerCase().trim());
-    const matchCategory = selectedTab === "Semua" || item.kategori === selectedTab;
+    const matchCategory =
+      selectedTab === "Semua" || item.kategori === selectedTab;
+
     return matchDate && matchSearch && matchCategory;
   });
 
   return (
     <View style={styles.container}>
       {/* HEADER */}
-      <LinearGradient
-        colors={["#174A6A", "#0B3B53"]}
-        style={styles.header}
-      >
+      <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
         <View style={styles.headerTop}>
           <Text style={styles.headerTitle}>Data Komoditas Lokal</Text>
           <TouchableOpacity onPress={() => setMenuVisible(true)}>
@@ -269,7 +301,6 @@ export default function DataLocalScreen({ navigation }) {
         >
           <TouchableOpacity
             style={styles.overlay}
-            activeOpacity={1}
             onPressOut={() => setMenuVisible(false)}
           >
             <View style={styles.menuContainer}>
@@ -327,8 +358,11 @@ export default function DataLocalScreen({ navigation }) {
           <View style={styles.tabRow}>
             {kategori.map((item, index) => (
               <TouchableOpacity
-                key={`${item}-${index}`}
-                style={[styles.tabItem, selectedTab === item && styles.tabActive]}
+                key={index}
+                style={[
+                  styles.tabItem,
+                  selectedTab === item && styles.tabActive,
+                ]}
                 onPress={() => setSelectedTab(item)}
               >
                 <Text
@@ -345,13 +379,9 @@ export default function DataLocalScreen({ navigation }) {
         </ScrollView>
       </LinearGradient>
 
-      {/* List */}
-      <ScrollView
-        style={styles.listContainer}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 160 }}
-      >
-        {filteredData.length > 0 ? (
+      {/* LIST */}
+      <ScrollView style={styles.listContainer}>
+        {filteredData.length ? (
           filteredData.map((item) => {
             const selected = selectedItems.includes(item.id);
             return (
@@ -367,22 +397,28 @@ export default function DataLocalScreen({ navigation }) {
                 {!isSelectionMode && (
                   <TouchableOpacity
                     style={styles.editIcon}
-                    onPress={async () => {
+                    onPress={() =>
                       navigation.navigate("EditData", {
                         item,
-                        onEditSuccess: async (updatedItem) => {
+                        onEditSuccess: async () => {
                           await pushNotification({
                             type: "success",
                             title: "Data Diperbarui",
-                            message: `${updatedItem.nama} berhasil diperbarui`,
+                            message: `${item.nama} berhasil diperbarui`,
                           });
+                          await fetchData();
                         },
-                      });
-                    }}
+                      })
+                    }
                   >
-                    <Ionicons name="create-outline" size={14} color="#174A6A" />
+                    <Ionicons
+                      name="create-outline"
+                      size={14}
+                      color="#174A6A"
+                    />
                   </TouchableOpacity>
                 )}
+
                 <Image
                   source={
                     item.image
@@ -391,16 +427,25 @@ export default function DataLocalScreen({ navigation }) {
                       ? { uri: item.local_image }
                       : null
                   }
-                  style={{ width: 64, height: 64, borderRadius: 10, marginEnd: 8 }}
-                  resizeMode="cover"
+                  style={{
+                    width: 64,
+                    height: 64,
+                    borderRadius: 10,
+                    marginEnd: 8,
+                    backgroundColor: "#EEE",
+                  }}
                 />
+
                 <View style={styles.leftSection}>
                   <Text style={styles.itemName}>{item.nama}</Text>
                   <Text style={styles.itemPrice}>
                     {item.harga} / {item.satuan}
                   </Text>
-                  <Text style={styles.itemDate}>{formatTanggalItem(item.tanggal)}</Text>
+                  <Text style={styles.itemDate}>
+                    {formatTanggalItem(item.tanggal)}
+                  </Text>
                 </View>
+
                 <View style={styles.rightSection}>
                   <Text style={styles.itemCategory}>{item.kategori}</Text>
                   <Text
@@ -408,19 +453,22 @@ export default function DataLocalScreen({ navigation }) {
                       styles.statusText,
                       {
                         color:
-                          item.status === "Tersinkron" ? "#16A34A" : "#DC2626",
+                          item.status === "Tersinkron"
+                            ? "#16A34A"
+                            : "#DC2626",
                       },
                     ]}
                   >
                     {item.status}
                   </Text>
                 </View>
+
                 {selected && (
                   <Ionicons
                     name="checkmark-circle"
                     size={22}
                     color="#16A34A"
-                    style={{ alignSelf: "center", marginLeft: 8 }}
+                    style={{ marginLeft: 8 }}
                   />
                 )}
               </TouchableOpacity>
@@ -448,10 +496,14 @@ export default function DataLocalScreen({ navigation }) {
           <Ionicons name="home-outline" size={24} color="#6B7280" />
           <Text style={styles.navText}>Beranda</Text>
         </TouchableOpacity>
+
         <TouchableOpacity style={styles.navItem}>
           <Ionicons name="folder" size={24} color="#174A6A" />
-          <Text style={[styles.navText, styles.navTextActive]}>Data Lokal</Text>
+          <Text style={[styles.navText, styles.navTextActive]}>
+            Data Lokal
+          </Text>
         </TouchableOpacity>
+
         <TouchableOpacity
           style={styles.navItem}
           onPress={() => navigation.navigate("Profile")}
@@ -464,7 +516,7 @@ export default function DataLocalScreen({ navigation }) {
   );
 }
 
-// ===== STYLES =====
+// STYLES
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },
   header: {
@@ -474,36 +526,126 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
   },
-  headerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  headerTop: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
   headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
-  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.2)", alignItems: "flex-end" },
-  menuContainer: { backgroundColor: "#174A6A", borderRadius: 10, marginTop: 70, marginRight: 15, paddingVertical: 6, width: 170 },
-  menuItem: { flexDirection: "row", alignItems: "center", paddingVertical: 10, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.2)" },
+  overlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.2)",
+    alignItems: "flex-end",
+  },
+  menuContainer: {
+    backgroundColor: "#174A6A",
+    borderRadius: 10,
+    marginTop: 70,
+    marginRight: 15,
+    paddingVertical: 6,
+    width: 170,
+  },
+  menuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.2)",
+  },
   menuText: { color: "#fff", fontSize: 14, fontWeight: "600" },
-  searchContainer: { flexDirection: "row", backgroundColor: "#fff", alignItems: "center", borderRadius: 10, marginTop: 10, paddingHorizontal: 10, height: 40 },
+  searchContainer: {
+    flexDirection: "row",
+    backgroundColor: "#fff",
+    alignItems: "center",
+    borderRadius: 10,
+    marginTop: 10,
+    paddingHorizontal: 10,
+    height: 40,
+  },
   searchInput: { flex: 1, marginLeft: 6, color: "#111827" },
-  filterRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 12 },
-  filterBox: { flexDirection: "row", alignItems: "center", backgroundColor: "#E0F2FE", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  filterRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 12,
+  },
+  filterBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#E0F2FE",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
   filterText: { marginLeft: 5, color: "#174A6A", fontWeight: "600" },
   tabRow: { flexDirection: "row", marginTop: 10, paddingBottom: 4 },
-  tabItem: { backgroundColor: "transparent", paddingVertical: 6, paddingHorizontal: 12, marginRight: 8, borderRadius: 20, borderWidth: 1, borderColor: "#fff" },
+  tabItem: {
+    backgroundColor: "transparent",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    marginRight: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#fff",
+  },
   tabActive: { backgroundColor: "#fff" },
   tabText: { color: "#fff", fontWeight: "500" },
   tabTextActive: { color: "#174A6A", fontWeight: "700" },
   listContainer: { padding: 16 },
-  card: { flexDirection: "row", backgroundColor: "#fff", borderRadius: 12, padding: 12, marginBottom: 10, elevation: 2, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 3, alignItems: "center", paddingRight: 16 },
-  editIcon: { position: "absolute", top: 6, right: 6, zIndex: 10, backgroundColor: "#E0F2FE", borderRadius: 6, padding: 3 },
+  card: {
+    flexDirection: "row",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    alignItems: "center",
+    paddingRight: 16,
+  },
+  editIcon: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    zIndex: 10,
+    backgroundColor: "#E0F2FE",
+    borderRadius: 6,
+    padding: 3,
+  },
   leftSection: { flex: 1, justifyContent: "center" },
-  rightSection: { minWidth: 110, alignItems: "flex-end", justifyContent: "center" },
+  rightSection: {
+    minWidth: 110,
+    alignItems: "flex-end",
+    justifyContent: "center",
+  },
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "700", marginTop: 2 },
   itemDate: { fontSize: 11, color: "#6B7280", marginTop: 4 },
-  itemCategory: { fontSize: 13, color: "#174A6A", fontWeight: "700", marginBottom: 4 },
+  itemCategory: { fontSize: 13, color: "#174A6A", fontWeight: "700" },
   statusText: { fontSize: 12, fontWeight: "700" },
   emptyText: { textAlign: "center", marginTop: 40, color: "#6B7280" },
-  deleteButton: { position: "absolute", bottom: 90, right: 20, backgroundColor: "#DC2626", flexDirection: "row", alignItems: "center", paddingVertical: 10, paddingHorizontal: 18, borderRadius: 30 },
+  deleteButton: {
+    position: "absolute",
+    bottom: 90,
+    right: 20,
+    backgroundColor: "#DC2626",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 30,
+  },
   deleteText: { color: "#fff", marginLeft: 6, fontWeight: "700" },
-  bottomNav: { flexDirection: "row", justifyContent: "space-around", backgroundColor: "#fff", paddingVertical: 10, borderTopWidth: 1, borderTopColor: "#E5E7EB" },
+  bottomNav: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    backgroundColor: "#fff",
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#E5E7EB",
+  },
   navItem: { alignItems: "center" },
   navText: { color: "#6B7280", fontSize: 12 },
   navTextActive: { color: "#174A6A", fontWeight: "700" },

@@ -128,15 +128,16 @@ export default function NotificationScreen({ navigation }) {
           <Ionicons name="arrow-back" size={26} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Notifikasi</Text>
-        <View style={{ width: 26 }} /> {/* placeholder */}
+        <View style={{ width: 26 }} />
       </View>
 
       {/* Body */}
       <ScrollView style={styles.body} showsVerticalScrollIndicator={false}>
         {notifications.length > 0 ? (
           notifications.map((notif) => (
-            <View
+            <TouchableOpacity
               key={notif.id}
+              onLongPress={() => handleDelete(notif.id)}
               style={[
                 styles.notifCard,
                 notif.type === "error" && { borderLeftColor: "#ef4444" },
@@ -151,15 +152,7 @@ export default function NotificationScreen({ navigation }) {
                   {notif.timestamp ? new Date(notif.timestamp).toLocaleString("id-ID") : ""}
                 </Text>
               </View>
-
-              {/* Tombol hapus */}
-              <TouchableOpacity
-                style={styles.deleteBtn}
-                onPress={() => handleDelete(notif.id)}
-              >
-                <Ionicons name="trash-outline" size={20} color="#ef4444" />
-              </TouchableOpacity>
-            </View>
+            </TouchableOpacity>
           ))
         ) : (
           <Text style={styles.emptyText}>Belum ada notifikasi</Text>
@@ -195,18 +188,11 @@ const styles = StyleSheet.create({
     elevation: 1,
     borderLeftWidth: 5,
     borderLeftColor: "#22c55e",
-    position: "relative",
   },
   icon: { marginRight: 10, marginTop: 2 },
   textContainer: { flex: 1 },
   notifTitle: { fontSize: 14, fontWeight: "700", color: "#111827" },
   notifMessage: { fontSize: 13, color: "#6B7280", marginTop: 2 },
   notifTime: { fontSize: 11, color: "#9CA3AF", marginTop: 4 },
-  deleteBtn: {
-    position: "absolute",
-    top: 8,
-    right: 8,
-    padding: 4,
-  },
   emptyText: { textAlign: "center", marginTop: 20, color: "#6B7280" },
 });

@@ -1,4 +1,8 @@
-// src/screens/DashboardScreen.js
+// ===============================
+// 📱 DashboardScreen.js (FINAL VERSION)
+// Fully Matched with database.js + Laravel Backend
+// ===============================
+
 import React, { useEffect, useState } from "react";
 import {
   View,
@@ -15,6 +19,7 @@ import NetInfo from "@react-native-community/netinfo";
 
 import BottomNav from "../components/BottomNav";
 import { userInfo } from "../../config/api";
+
 import {
   initDatabase,
   syncFromServer,
@@ -26,6 +31,63 @@ import {
   getImageForCommodityByName,
 } from "../../config/database";
 
+// =========================================
+// Helper Format
+// =========================================
+
+const formatTanggalItem = (tgl) => {
+  if (!tgl) return "-";
+  const d = new Date(tgl);
+  if (isNaN(d.getTime())) return "-";
+
+  return `${d.toLocaleDateString("id-ID", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  })}, ${d.toLocaleTimeString("id-ID", {
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
+};
+
+const formatHarga = (harga) => {
+  if (harga == null) return "-";
+  const num = typeof harga === "string" ? parseFloat(harga) : harga;
+  if (isNaN(num)) return "-";
+  return `Rp ${num.toLocaleString("id-ID")}`;
+};
+
+// =========================================
+// Tambahkan Gambar (Offline → Online)
+// =========================================
+const enrichItemsWithImages = async (items) => {
+  const enriched = [];
+
+  for (const it of items) {
+    const item = { ...it };
+
+    // Ambil dari local DB berdasarkan nama komoditas
+    if (!item.local_image && !item.image && item.name_commodity) {
+      const found = await getImageForCommodityByName(item.name_commodity);
+      if (found?.local_image) item.local_image = found.local_image;
+      else if (found?.image) item.image = found.image;
+    }
+
+    // Coba cek apakah gambar lokal sudah ada
+    if (!item.local_image && item.image) {
+      const local = await getLocalImagePath(item.image);
+      if (local) item.local_image = local;
+    }
+
+    enriched.push(item);
+  }
+
+  return enriched;
+};
+
+// =========================================
+// MAIN COMPONENT
+// =========================================
 export default function DashboardScreen({ navigation }) {
   const [dashboardData, setDashboardData] = useState({ latest_prices: [] });
   const [user, setUser] = useState({
@@ -33,150 +95,103 @@ export default function DashboardScreen({ navigation }) {
     market_name: "",
     total_commodities: "",
   });
+
   const [greeting, setGreeting] = useState("");
   const [isConnected, setIsConnected] = useState(true);
   const [uniqueCount, setUniqueCount] = useState(0);
 
-  const formatTanggalItem = (tgl) => {
-    if (!tgl) return "-";
-    const dateObj = new Date(tgl);
-    if (isNaN(dateObj.getTime())) return "-";
-    return `${dateObj.toLocaleDateString("id-ID", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    })}, ${dateObj.toLocaleTimeString("id-ID", {
-      hour: "2-digit",
-      minute: "2-digit",
-    })}`;
-  };
-
-  const formatHarga = (harga) => {
-    if (harga == null) return "-";
-    const num = typeof harga === "string" ? parseFloat(harga) : harga;
-    if (isNaN(num)) return "-";
-    return `Rp ${num.toLocaleString("id-ID")}`;
-  };
-
-  const enrichItemsWithImages = async (items) => {
-    const enriched = [];
-    for (const it of items) {
-      const item = { ...it };
-      if (!item.local_image && !item.image && item.name_commodity) {
-        try {
-          const found = await getImageForCommodityByName(item.name_commodity);
-          if (found?.local_image) item.local_image = found.local_image;
-          else if (found?.image) item.image = found.image;
-        } catch {}
-      }
-      if (!item.local_image && item.image) {
-        try {
-          const local = await getLocalImagePath(item.image);
-          if (local) item.local_image = local;
-        } catch {}
-      }
-      enriched.push(item);
-    }
-    return enriched;
-  };
-
+  // ======================================
+  // Load Riwayat Pendataan
+  // ======================================
   const loadRiwayatPendataan = async () => {
     try {
-      const riwayatOnline = await getAllRiwayatPendataan();
-      const riwayatOffline = await getAllLocalPrices();
+      const online = await getAllRiwayatPendataan(); // riwayat_pendataan
+      const offline = await getAllLocalPrices(); // local_prices join
 
-      const combined = [...riwayatOnline, ...riwayatOffline];
+      const combined = [...online, ...offline];
 
-      const uniqueArray = combined.filter(
+      // Hilangkan duplikasi berdasarkan name_commodity & tanggal
+      const unique = combined.filter(
         (item, index, self) =>
           index ===
           self.findIndex(
             (x) =>
-              (x.server_id &&
-                item.server_id &&
-                x.server_id === item.server_id) ||
-              (!item.server_id &&
-                x.name_commodity === item.name_commodity &&
-                (x.tanggal || x.created_at) ===
-                  (item.tanggal || item.created_at))
+              (x.tanggal && item.tanggal && x.tanggal === item.tanggal) &&
+              x.name_commodity === item.name_commodity
           )
       );
 
-      const sorted = uniqueArray.sort(
+      // Sort terbaru
+      const sorted = unique.sort(
         (a, b) =>
-          new Date(b.tanggal || b.created_at) -
-          new Date(a.tanggal || a.created_at)
+          new Date(b.tanggal ?? b.created_at) -
+          new Date(a.tanggal ?? a.created_at)
       );
 
       const top10 = sorted.slice(0, 10);
       const enriched = await enrichItemsWithImages(top10);
 
-      setDashboardData((prev) => ({
-        ...prev,
-        latest_prices: enriched,
-      }));
+      setDashboardData({ latest_prices: enriched });
     } catch (err) {
-      console.error("❌ Gagal load riwayat pendataan:", err);
+      console.error("❌ loadRiwayatPendataan:", err);
     }
   };
 
+  // ======================================
+  // Load Unique Count
+  // ======================================
   const loadUniqueCount = async () => {
     try {
       const c = await countUniqueCommodities();
       setUniqueCount(c ?? 0);
     } catch (err) {
-      console.error("❌ Gagal ambil komoditas unik:", err);
-      setUniqueCount(0);
+      console.error("❌ countUnique:", err);
     }
   };
 
+  // ======================================
+  // Main Setup
+  // ======================================
   useEffect(() => {
     let unsubscribe;
+
     const setup = async () => {
       await initDatabase();
       await loadRiwayatPendataan();
       await loadUniqueCount();
 
-      unsubscribe = NetInfo.addEventListener((state) =>
-        setIsConnected(state.isConnected)
+      unsubscribe = NetInfo.addEventListener((s) =>
+        setIsConnected(s.isConnected)
       );
 
       const token = await AsyncStorage.getItem("token");
 
       if (token) {
-        try {
-          const state = await NetInfo.fetch();
-          if (state.isConnected) {
-            await syncFromServer();
-            await syncPricesToServer();
-            await loadRiwayatPendataan();
-            await loadUniqueCount();
+        const net = await NetInfo.fetch();
 
-            const data = await userInfo(token);
-            if (data?.success) {
-              const userData = {
-                user_name: data.user_name || "Petugas Pasar",
-                market_name: data.market_name || "Tidak diketahui",
-                total_commodities: data.total_commodities ?? 0,
-              };
-              setUser(userData);
-              await AsyncStorage.setItem(
-                "user_info",
-                JSON.stringify(userData)
-              );
-            }
-          } else {
-            const stored = await AsyncStorage.getItem("user_info");
-            if (stored) setUser(JSON.parse(stored));
+        if (net.isConnected) {
+          await syncFromServer();
+          await syncPricesToServer();
+          await loadRiwayatPendataan();
+          await loadUniqueCount();
+
+          const data = await userInfo(token);
+          if (data?.success) {
+            const userData = {
+              user_name: data.user_name || "Petugas Pasar",
+              market_name: data.market_name || "Tidak diketahui",
+              total_commodities: data.total_commodities ?? 0,
+            };
+            setUser(userData);
+            await AsyncStorage.setItem("user_info", JSON.stringify(userData));
           }
-        } catch (err) {
-          console.error("❌ Gagal fetch dashboard:", err);
+        } else {
+          const stored = await AsyncStorage.getItem("user_info");
+          if (stored) setUser(JSON.parse(stored));
         }
-      } else {
-        const stored = await AsyncStorage.getItem("user_info");
-        if (stored) setUser(JSON.parse(stored));
       }
 
+      // Greeting
       const hour = new Date().getHours();
       if (hour >= 4 && hour < 11) setGreeting("Selamat Pagi");
       else if (hour >= 11 && hour < 15) setGreeting("Selamat Siang");
@@ -188,6 +203,9 @@ export default function DashboardScreen({ navigation }) {
     return () => unsubscribe && unsubscribe();
   }, []);
 
+    // ======================================
+  // Navigation Handlers
+  // ======================================
   const handleTambahData = () => {
     navigation.navigate("Input", {
       onAddPrice: async () => {
@@ -206,17 +224,19 @@ export default function DashboardScreen({ navigation }) {
     year: "numeric",
   });
 
+  // ======================================
+  // RENDER UI
+  // ======================================
   return (
     <View style={styles.container}>
       <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
         <View style={styles.headerTop}>
           <View>
-            <Text style={styles.greeting}>{greeting || ""}!</Text>
-            <Text style={styles.name}>{user?.user_name || ""}</Text>
+            <Text style={styles.greeting}>{greeting}!</Text>
+            <Text style={styles.name}>{user?.user_name}</Text>
           </View>
 
           <View style={styles.rightHeader}>
-            {/* 🟢 Indikator + teks Online/Offline */}
             <View style={styles.statusContainer}>
               <View
                 style={[
@@ -230,32 +250,30 @@ export default function DashboardScreen({ navigation }) {
             </View>
 
             <TouchableOpacity onPress={handleNotifikasi}>
-              <Ionicons
-                name="notifications-outline"
-                size={26}
-                color="#fff"
-              />
+              <Ionicons name="notifications-outline" size={26} color="#fff" />
             </TouchableOpacity>
           </View>
         </View>
       </LinearGradient>
 
+      {/* BODY */}
       <View style={styles.body}>
         <View style={styles.infoCard}>
           <View style={styles.rowBetween}>
             <View>
               <Text style={styles.label}>Pasar</Text>
-              <Text style={styles.value}>{user?.market_name || ""}</Text>
+              <Text style={styles.value}>{user.market_name}</Text>
               <Text style={styles.dateBelowMarket}>{tanggalSekarang}</Text>
             </View>
 
             <View>
               <Text style={styles.label}>Total Komoditas</Text>
               <Text style={styles.value}>
-                {String(user?.total_commodities ?? 0)}
+                {String(user.total_commodities)}
               </Text>
+
               <Text style={styles.subLabel}>Komoditas Sudah Diinput</Text>
-              <Text style={styles.uniqueValue}>{String(uniqueCount ?? 0)}</Text>
+              <Text style={styles.uniqueValue}>{String(uniqueCount)}</Text>
             </View>
           </View>
 
@@ -267,45 +285,41 @@ export default function DashboardScreen({ navigation }) {
         <Text style={styles.sectionTitle}>Pendataan Terakhir</Text>
 
         <ScrollView showsVerticalScrollIndicator={false}>
-          {dashboardData?.latest_prices?.length > 0 ? (
-            dashboardData.latest_prices
-              .filter((item) => item && typeof item === "object")
-              .map((item, idx) => (
-                <View
-                  key={`${item.server_id || item.name_commodity}-${idx}`}
-                  style={styles.cardItem}
-                >
-                  <Image
-                    source={
-                      item.local_image
-                        ? { uri: item.local_image }
-                        : item.image
-                        ? { uri: item.image }
-                        : null
-                    }
-                    style={styles.image}
-                  />
+          {dashboardData.latest_prices.length > 0 ? (
+            dashboardData.latest_prices.map((item, idx) => (
+              <View key={idx} style={styles.cardItem}>
+                <Image
+                  source={
+                    item.local_image
+                      ? { uri: item.local_image }
+                      : item.image
+                      ? { uri: item.image }
+                      : null
+                  }
+                  style={styles.image}
+                />
 
-                  <View style={styles.textContainer}>
-                    <Text style={styles.itemName}>
-                      {item.name_commodity || "-"}
-                    </Text>
-                    <Text style={styles.itemPrice}>
-                      {formatHarga(item.price)} / {item.unit || "-"}
-                    </Text>
-                    <Text style={styles.itemDate}>
-                      {formatTanggalItem(item.tanggal || item.created_at)}
-                    </Text>
-                  </View>
+                <View style={styles.textContainer}>
+                  <Text style={styles.itemName}>
+                    {item.name_commodity || "-"}
+                  </Text>
 
-                  {/* 🔥 KATEGORI DIPINDAH KE KANAN */}
-                  <View style={styles.rightSection}>
-                    <Text style={styles.itemCategory}>
-                      {item.name_category || "Lainnya"}
-                    </Text>
-                  </View>
+                  <Text style={styles.itemPrice}>
+                    {formatHarga(item.price)} / {item.unit}
+                  </Text>
+
+                  <Text style={styles.itemDate}>
+                    {formatTanggalItem(item.tanggal)}
+                  </Text>
                 </View>
-              ))
+
+                <View style={styles.rightSection}>
+                  <Text style={styles.itemCategory}>
+                    {item.name_category || "Lainnya"}
+                  </Text>
+                </View>
+              </View>
+            ))
           ) : (
             <Text style={styles.emptyText}>Belum ada pendataan terakhir</Text>
           )}
@@ -316,6 +330,10 @@ export default function DashboardScreen({ navigation }) {
     </View>
   );
 }
+
+// ======================================
+// STYLES (tidak diubah)
+// ======================================
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F3F4F6" },
@@ -330,14 +348,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   rightHeader: { flexDirection: "row", alignItems: "center" },
-
-  // 🟢 Status Online/Offline
   statusContainer: {
     flexDirection: "row",
     alignItems: "center",
     marginRight: 12,
   },
-
   statusDot: {
     width: 12,
     height: 12,
@@ -352,12 +367,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginRight: 6,
   },
-
-  greeting: {
-    color: "#E0F2FE",
-    fontSize: 16,
-    fontWeight: "500",
-  },
+  greeting: { color: "#E0F2FE", fontSize: 16, fontWeight: "500" },
   name: { color: "#FFFFFF", fontSize: 18, fontWeight: "700" },
 
   body: {
@@ -377,12 +387,18 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     elevation: 2,
   },
-
-  rowBetween: { flexDirection: "row", justifyContent: "space-between" },
+  rowBetween: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
   label: { color: "#6B7280", fontSize: 13 },
   value: { color: "#111827", fontSize: 15, fontWeight: "600" },
   subLabel: { color: "#6B7280", fontSize: 12, marginTop: 8 },
-  uniqueValue: { color: "#111827", fontSize: 15, fontWeight: "700" },
+  uniqueValue: {
+    color: "#111827",
+    fontSize: 15,
+    fontWeight: "700",
+  },
   dateBelowMarket: { fontSize: 12, color: "#6B7280", marginTop: 2 },
 
   btnTambah: {
@@ -429,7 +445,11 @@ const styles = StyleSheet.create({
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "600" },
   itemDate: { fontSize: 12, color: "#6B7280" },
-  itemCategory: { fontSize: 12, fontWeight: "700", color: "#174A6A" },
+  itemCategory: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#174A6A",
+  },
 
   emptyText: {
     color: "#6B7280",

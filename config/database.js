@@ -1,6 +1,12 @@
 // ====================================
-// 📦 config/database.js (versi lengkap & rapi + cache gambar fix kolom image)
+// 📦 database.js (FINAL - sync batch / sync single compatible)
+// Matches backend: POST /api/sync  & POST /api/sync/price
+// - auto-download images on syncFromServer
+// - robust migration helper
+// - NetInfo uses isInternetReachable
+// - batch sync with single-item fallback
 // ====================================
+
 import * as SQLite from "expo-sqlite";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
@@ -10,20 +16,22 @@ import api from "./api";
 let db;
 let netListenerAdded = false;
 
-// ====================================
-// 🔹 Inisialisasi Database
-// ====================================
-export const initDatabase = async () => {
+const openDb = () => {
   if (!db) db = SQLite.openDatabaseSync("local_market.db");
+  return db;
+};
 
-  // =========================
-  // Helper SQLite async
-  // =========================
+// -----------------------------
+// Init DB + async helpers
+// -----------------------------
+export const initDatabase = async () => {
+  openDb();
+
   if (!db.runAsync) {
     db.runAsync = (sql, params = []) =>
       new Promise((resolve, reject) => {
         db.transaction((tx) => {
-          tx.executeSql(sql, params, (_, result) => resolve(result), (_, err) => reject(err));
+          tx.executeSql(sql, params, (_, res) => resolve(res), (_, err) => reject(err));
         });
       });
 
@@ -35,470 +43,566 @@ export const initDatabase = async () => {
       });
 
     db.getFirstAsync = async (sql, params = []) => {
-      const results = await db.getAllAsync(sql, params);
-      return results[0] || null;
+      const rows = await db.getAllAsync(sql, params);
+      return rows[0] || null;
     };
   }
 
-  // =========================
-  // Periksa & buat tabel
-  // =========================
-  const tableQueries = [
-    `CREATE TABLE IF NOT EXISTS categories (
-      id INTEGER PRIMARY KEY,
-      name_category TEXT
-    );`,
-    `CREATE TABLE IF NOT EXISTS commodities (
-      id INTEGER PRIMARY KEY,
-      name_commodity TEXT,
-      category_id INTEGER,
-      unit TEXT,
-      image TEXT,
-      local_image TEXT,
-      FOREIGN KEY (category_id) REFERENCES categories(id)
-    );`,
-    `CREATE TABLE IF NOT EXISTS markets (
-      id INTEGER PRIMARY KEY,
-      name_market TEXT,
-      address TEXT
-    );`,
-    `CREATE TABLE IF NOT EXISTS local_prices (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      commodity_id INTEGER,
-      category_id INTEGER,
-      market_id INTEGER,
-      price REAL,
-      unit TEXT,
-      synced INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
-      FOREIGN KEY (commodity_id) REFERENCES commodities(id),
-      FOREIGN KEY (category_id) REFERENCES categories(id),
-      FOREIGN KEY (market_id) REFERENCES markets(id)
-    );`,
-    `CREATE TABLE IF NOT EXISTS riwayat_hapus (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name_commodity TEXT,
-      price REAL,
-      unit TEXT,
-      name_category TEXT,
-      tanggal TEXT
-    );`,
-    `CREATE TABLE IF NOT EXISTS riwayat_pendataan (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name_commodity TEXT,
-      price REAL,
-      unit TEXT,
-      name_category TEXT,
-      tanggal TEXT
-    );`,
-    `CREATE TABLE IF NOT EXISTS units (
-      id INTEGER PRIMARY KEY,
-      name TEXT
-    );`,
-  ];
-
-  for (const query of tableQueries) {
-    await db.runAsync(query);
+  try {
+    await runMigrationsIfNeeded();
+  } catch (e) {
+    console.warn("⚠ runMigrationsIfNeeded error:", e);
   }
 
-  console.log("✅ Database & tabel lokal siap digunakan");
+  const tableQueries = [
+    `CREATE TABLE IF NOT EXISTS categories (
+       id_category INTEGER PRIMARY KEY,
+       name_category TEXT
+     );`,
+    `CREATE TABLE IF NOT EXISTS commodities (
+       id_commodity INTEGER PRIMARY KEY,
+       name_commodity TEXT,
+       category_id INTEGER,
+       category_name TEXT,
+       unit_id INTEGER,
+       image TEXT,
+       local_image TEXT
+     );`,
+    `CREATE TABLE IF NOT EXISTS markets (
+       id_market INTEGER PRIMARY KEY,
+       name_market TEXT,
+       address TEXT
+     );`,
+    `CREATE TABLE IF NOT EXISTS units (
+       id INTEGER PRIMARY KEY,
+       name_unit TEXT
+     );`,
+    `CREATE TABLE IF NOT EXISTS local_prices (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       commodity_id INTEGER,
+       category_id INTEGER,
+       price REAL,
+       unit TEXT,
+       synced INTEGER DEFAULT 0,
+       created_at TEXT,
+       updated_at TEXT
+     );`,
+    `CREATE TABLE IF NOT EXISTS riwayat_hapus (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       name_commodity TEXT,
+       price REAL,
+       unit TEXT,
+       name_category TEXT,
+       tanggal TEXT
+     );`,
+    `CREATE TABLE IF NOT EXISTS riwayat_pendataan (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       name_commodity TEXT,
+       price REAL,
+       unit TEXT,
+       name_category TEXT,
+       tanggal TEXT
+     );`,
+  ];
 
-  // 🔄 Sinkron otomatis saat online (hanya sekali)
+  for (const q of tableQueries) {
+    await db.runAsync(q);
+  }
+
+  console.log("✅ Database initialized with backend schema");
+
   if (!netListenerAdded) {
     NetInfo.addEventListener((state) => {
-      if (state.isConnected) {
-        console.log("🌐 Koneksi aktif — mulai sinkronisasi otomatis...");
-        if (typeof syncPricesToServer === "function") {
-          // panggil tanpa menunggu
-          syncPricesToServer().catch((e) => console.warn("Auto syncPricesToServer error:", e));
-        }
+      if (state.isInternetReachable === true) {
+        console.log("🌐 Internet reachable — starting auto-sync");
+        // don't await here — function manages its own errors/logging
+        syncPricesToServer().catch((e) => console.warn("Auto sync error:", e));
       }
     });
     netListenerAdded = true;
   }
 };
 
-// ====================================
-// 🔸 Ambil instance database
-// ====================================
+const runMigrationsIfNeeded = async () => {
+  const dbInst = openDb();
+
+  // ensure helper functions exist on the synchronous db instance
+  if (!dbInst.getAllAsync) {
+    dbInst.getAllAsync = (sql, params = []) =>
+      new Promise((resolve, reject) => {
+        dbInst.transaction((tx) => {
+          tx.executeSql(sql, params, (_, { rows }) => resolve(rows._array || []), (_, err) => reject(err));
+        });
+      });
+    dbInst.runAsync = (sql, params = []) =>
+      new Promise((resolve, reject) => {
+        dbInst.transaction((tx) => {
+          tx.executeSql(sql, params, (_, res) => resolve(res), (_, err) => reject(err));
+        });
+      });
+  }
+
+  const tables = await dbInst.getAllAsync(`SELECT name FROM sqlite_master WHERE type='table' AND name='commodities'`);
+  if (!tables || tables.length === 0) return;
+
+  const cols = await dbInst.getAllAsync(`PRAGMA table_info(commodities);`);
+  const columnNames = cols.map((c) => c.name);
+  if (columnNames.includes("id_commodity")) return;
+
+  console.log("🔁 Detected old commodities schema, running migration...");
+
+  try {
+    await dbInst.runAsync(
+      `CREATE TABLE IF NOT EXISTS _commodities_new (
+         id_commodity INTEGER PRIMARY KEY,
+         name_commodity TEXT,
+         category_id INTEGER,
+         category_name TEXT,
+         unit_id INTEGER,
+         image TEXT,
+         local_image TEXT
+       );`
+    );
+
+    const map = {
+      id_commodity: columnNames.includes("id") ? "id" : columnNames.includes("id_commodity") ? "id_commodity" : null,
+      name_commodity: columnNames.includes("name") ? "name" : columnNames.includes("name_commodity") ? "name_commodity" : null,
+      category_id: columnNames.includes("category_id") ? "category_id" : null,
+      category_name: columnNames.includes("category_name") ? "category_name" : null,
+      unit_id: columnNames.includes("unit_id") ? "unit_id" : columnNames.includes("id_unit") ? "id_unit" : null,
+      image: columnNames.includes("image") ? "image" : null,
+      local_image: columnNames.includes("local_image") ? "local_image" : null,
+    };
+
+    const selectExpr = [
+      map.id_commodity ? map.id_commodity : "NULL",
+      map.name_commodity ? map.name_commodity : "NULL",
+      map.category_id ? map.category_id : "NULL",
+      map.category_name ? map.category_name : "NULL",
+      map.unit_id ? map.unit_id : "NULL",
+      map.image ? map.image : "NULL",
+      map.local_image ? map.local_image : "NULL",
+    ].join(", ");
+
+    await dbInst.runAsync(
+      `INSERT INTO _commodities_new
+         (id_commodity, name_commodity, category_id, category_name, unit_id, image, local_image)
+       SELECT ${selectExpr} FROM commodities;`
+    );
+
+    await dbInst.runAsync(`ALTER TABLE commodities RENAME TO _commodities_old;`);
+    await dbInst.runAsync(`ALTER TABLE _commodities_new RENAME TO commodities;`);
+
+    console.log("✅ Migration completed: commodities table migrated to new schema.");
+  } catch (e) {
+    console.warn("⚠ Migration failed for commodities:", e);
+  }
+};
+
 export const getDatabase = async () => {
   if (!db) await initDatabase();
   return db;
 };
 
-// ====================================
-// 🔹 Fungsi download gambar ke local
-// ====================================
+// -----------------------------
+// Image helpers
+// -----------------------------
 export const downloadImage = async (imageUrl, filename) => {
   try {
     if (!imageUrl) return null;
     const localUri = `${FileSystem.documentDirectory}${filename}`;
-    try {
-      const fileInfo = await FileSystem.getInfoAsync(localUri);
-      if (!fileInfo.exists) {
-        // downloadAsync akan menimpa file jika ada, tapi kita cek dulu
-        await FileSystem.downloadAsync(imageUrl, localUri);
-      }
-      return localUri;
-    } catch (err) {
-      console.warn("⚠️ Gagal download gambar:", err);
-      return null;
+    const info = await FileSystem.getInfoAsync(localUri);
+    if (!info.exists) {
+      await FileSystem.downloadAsync(imageUrl, localUri);
     }
-  } catch (err) {
-    console.warn("⚠️ downloadImage error:", err);
+    return localUri;
+  } catch (e) {
+    console.warn("⚠ downloadImage error:", e);
     return null;
   }
 };
 
-// ====================================
-// 🔹 Helper: dapatkan path lokal dari image URL (jika sudah didownload)
-// ====================================
 export const getLocalImagePath = async (imageUrl) => {
   try {
     if (!imageUrl) return null;
-    // filename derive dari URL terakhir
     const parts = imageUrl.split("/");
-    const filename = parts[parts.length - 1] || `img_${Buffer.from(imageUrl).toString("base64")}.jpg`;
+    const filename = parts[parts.length - 1] || `img_${Date.now()}.jpg`;
     const localUri = `${FileSystem.documentDirectory}${filename}`;
     const info = await FileSystem.getInfoAsync(localUri);
     return info.exists ? localUri : null;
-  } catch (err) {
+  } catch (e) {
     return null;
   }
 };
 
-// ====================================
-// 🔹 Helper: cari commodity by name dan kembalikan kolom image/local_image
-// ====================================
 export const getImageForCommodityByName = async (name) => {
   try {
     if (!name) return null;
     const db = await getDatabase();
-    const row = await db.getFirstAsync(`SELECT id, image, local_image FROM commodities WHERE name_commodity = ? LIMIT 1;`, [name]);
-    return row || null;
+    const row = await db.getFirstAsync(
+      `SELECT id_commodity, name_commodity, image, local_image, unit_id FROM commodities WHERE name_commodity = ? LIMIT 1;`,
+      [name]
+    );
+    if (row) return row;
+    const alt = await db.getFirstAsync(
+      `SELECT id AS id_commodity, name AS name_commodity, image, local_image, id_unit as unit_id FROM commodities WHERE name = ? LIMIT 1;`,
+      [name]
+    );
+    return alt || null;
   } catch (err) {
     return null;
   }
 };
 
-// ====================================
-// 🔹 Safe JSON parse helper untuk respon server dengan wrapper { data: [...] }
-// ====================================
+// -----------------------------
+// Helpers: parse response + ensure full URL
+// -----------------------------
 const safeParseResponseData = async (response) => {
   try {
     const text = await response.text();
-    // jika server kirim HTML (error), throw supaya caller tahu
     const trimmed = text.trim();
-    if (trimmed.startsWith("<")) {
-      throw new Error("Response looks like HTML (not JSON)");
-    }
-
+    if (trimmed.startsWith("<")) throw new Error("Response looks like HTML (not JSON)");
     const parsed = JSON.parse(trimmed);
-    // jika ada wrapper data -> gunakan data, kalau tidak gunakan parsed langsung
     if (parsed && (parsed.data || parsed.results || parsed.latest_prices)) {
-      // prefer 'data' then 'results' then 'latest_prices'
       return parsed.data || parsed.results || parsed.latest_prices;
     }
     return parsed;
   } catch (err) {
-    // bubble error with message so caller can report
     throw err;
   }
 };
 
-// ====================================
-// 🔹 Sinkronisasi Data dari Server (unit lengkap + cache gambar)
-// ====================================
+const ensureFullImageUrl = (maybeImage) => {
+  if (!maybeImage) return null;
+  if (typeof maybeImage !== "string") return null;
+  const trimmed = maybeImage.trim();
+  if (trimmed === "") return null;
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed;
+
+  // prefer api.IMAGE_PATH, else build from BASE_URL + storage path
+  const pathFromApi = api.IMAGE_PATH || (api.BASE_URL ? `${api.BASE_URL.replace(/\/$/, "")}/storage/commodity_images/` : null);
+  if (pathFromApi) return pathFromApi + trimmed;
+  return trimmed;
+};
+
+const downloadMissingLocalImages = async () => {
+  try {
+    const dbInst = await getDatabase();
+    const needs = await dbInst.getAllAsync(`SELECT id_commodity, image, local_image FROM commodities WHERE image IS NOT NULL AND (local_image IS NULL OR local_image = '')`);
+    for (const row of needs) {
+      try {
+        const fullUrl = ensureFullImageUrl(row.image);
+        if (!fullUrl) continue;
+        const filename = fullUrl.split("/").pop();
+        const local = await downloadImage(fullUrl, filename);
+        if (local) {
+          await dbInst.runAsync(`UPDATE commodities SET local_image = ? WHERE id_commodity = ?;`, [local, row.id_commodity]);
+        }
+      } catch (e) {
+        console.warn("⚠ downloadMissingLocalImages item failed", row.id_commodity, e);
+      }
+    }
+  } catch (e) {
+    console.warn("⚠ downloadMissingLocalImages failed:", e);
+  }
+};
+
+// -----------------------------
+// Sync from server (with image download)
+// -----------------------------
 export const syncFromServer = async () => {
   try {
-    console.log("📡 Sinkronisasi data kategori, komoditas, pasar, & unit...");
     const token = await AsyncStorage.getItem("token");
     if (!token) throw new Error("Token tidak ditemukan");
 
-    const endpoints = [
-      { name: "categories", url: api.CATEGORIES },
-      { name: "commodities", url: api.COMMODITIES },
-      { name: "markets", url: api.GET_MARKET },
-      { name: "units", url: api.UNIT },
-    ];
+    const endpoints = {
+      categories: api.CATEGORIES,
+      commodities: api.COMMODITIES,
+      markets: api.GET_MARKET,
+      units: api.UNIT,
+    };
 
     const results = {};
 
-    for (const ep of endpoints) {
+    for (const key in endpoints) {
       try {
-        const res = await fetch(ep.url, { headers: { Authorization: `Bearer ${token}` } });
+        const res = await fetch(endpoints[key], { headers: { Authorization: `Bearer ${token}` } });
         if (!res.ok) {
-          console.warn(`⚠️ Endpoint ${ep.name} return status ${res.status}`);
-          results[ep.name] = null;
+          console.warn(`⚠️ Endpoint ${key} returned ${res.status}`);
+          results[key] = null;
           continue;
         }
-        // parse safely (meng-handle wrapper { data: [...] })
         const parsed = await safeParseResponseData(res);
-        // parsed could be array or object -> normalize to array for our usage
-        results[ep.name] = Array.isArray(parsed) ? parsed : parsed?.data ?? parsed;
+        results[key] = Array.isArray(parsed) ? parsed : parsed?.data ?? parsed;
       } catch (err) {
-        console.error(`❌ Gagal fetch/parse ${ep.name}:`, err);
-        results[ep.name] = null;
+        console.error(`❌ Gagal fetch/parse ${key}:`, err);
+        results[key] = null;
       }
     }
 
     const db = await getDatabase();
 
-    // =========================
-    // Simpan unit
-    // =========================
-    if (results.units) {
-      await db.runAsync("DELETE FROM units;");
-      for (const u of results.units) {
-        await db.runAsync(
-          `INSERT INTO units (id, name) VALUES (?, ?);`,
-          [u.id, u.name || "-"]
-        );
-      }
-      console.log("✅ Data units berhasil disimpan");
-    }
-
-    // =========================
-    // Simpan kategori
-    // =========================
+    // Categories
     if (results.categories) {
       await db.runAsync("DELETE FROM categories;");
       for (const cat of results.categories) {
-        await db.runAsync(
-          `INSERT INTO categories (id, name_category) VALUES (?, ?);`,
-          [cat.id, cat.name_category || "-"]
-        );
+        await db.runAsync(`INSERT OR REPLACE INTO categories (id_category, name_category) VALUES (?, ?);`, [cat.id_category || cat.id, cat.name_category || cat.name || "-"]);
       }
-      console.log("✅ Data kategori berhasil disimpan");
+      console.log("✅ Data categories saved");
     }
 
-    // =========================
-    // Simpan komoditas dengan mapping unit + download gambar
-    // =========================
+    // Units
+    if (results.units) {
+      await db.runAsync("DELETE FROM units;");
+      for (const u of results.units) {
+        await db.runAsync(`INSERT OR REPLACE INTO units (id, name_unit) VALUES (?, ?);`, [u.id || u.id, u.name_unit || u.name || "-"]);
+      }
+      console.log("✅ Data units saved");
+    }
+
+    // Commodities (image URL normalized + local download)
     if (results.commodities) {
       await db.runAsync("DELETE FROM commodities;");
+      for (const c of results.commodities) {
+        try {
+          const categoryId = c.category_id || c.category?.id || null;
+          const categoryName = c.category_name || c.category?.name_category || c.category?.name || null;
+          const nameCommodity = c.name_commodity || c.name || "-";
+          const idCommodity = c.id_commodity || c.id || null;
+          const unitId = c.unit_id || c.unit?.id || c.unit || null;
+          const rawImage = c.image || c.image_url || c.photo || null;
 
-      for (const com of results.commodities) {
-        const categoryId = com.category_id || com.category?.id || null;
-        let unitName = "kg"; // default
-
-        if (com.unit_id && results.units) {
-          const foundUnit = results.units.find((u) => u.id === com.unit_id);
-          if (foundUnit) unitName = foundUnit.name;
-        } else if (com.unit?.name) {
-          unitName = com.unit.name;
-        } else if (com.unit) {
-          unitName = com.unit;
-        }
-
-        // simpan image url di kolom image
-        await db.runAsync(
-          `INSERT INTO commodities (id, name_commodity, category_id, unit, image, local_image) VALUES (?, ?, ?, ?, ?, ?);`,
-          [com.id, com.name_commodity || "-", categoryId, unitName, com.image || null, null]
-        );
-
-        // 🔹 Download gambar dan simpan path lokal (jika ada)
-        if (com.image) {
-          const parts = com.image.split("/");
-          const filename = parts[parts.length - 1] || `commodity_${com.id}.jpg`;
-          const localPath = await downloadImage(com.image, filename);
-          if (localPath) {
-            await db.runAsync(
-              `UPDATE commodities SET local_image = ? WHERE id = ?;`,
-              [localPath, com.id]
-            );
+          const imageUrl = ensureFullImageUrl(rawImage);
+          let localPath = null;
+          if (imageUrl) {
+            try {
+              const filename = imageUrl.split("/").pop();
+              localPath = await downloadImage(imageUrl, filename);
+            } catch (e) {
+              console.warn("⚠ image download failed for", imageUrl, e);
+            }
           }
+
+          await db.runAsync(
+            `INSERT OR REPLACE INTO commodities
+              (id_commodity, name_commodity, category_id, category_name, unit_id, image, local_image)
+             VALUES (?, ?, ?, ?, ?, ?, ?);`,
+            [idCommodity, nameCommodity, categoryId, categoryName, unitId, imageUrl, localPath]
+          );
+        } catch (e) {
+          console.warn("⚠ commodity insert error:", e);
         }
       }
-      console.log("✅ Data komoditas berhasil disimpan dengan unit & gambar lokal");
+
+      await downloadMissingLocalImages();
+      console.log("✅ Data commodities saved (images downloaded where possible)");
     }
 
-    // =========================
-    // Simpan pasar/market
-    // =========================
+    // Markets
     if (results.markets) {
       await db.runAsync("DELETE FROM markets;");
-      for (const market of results.markets) {
-        await db.runAsync(
-          `INSERT INTO markets (id, name_market, address) VALUES (?, ?, ?);`,
-          [market.id, market.name_market || "-", market.location || "-"]
-        );
+      for (const m of results.markets) {
+        await db.runAsync(`INSERT OR REPLACE INTO markets (id_market, name_market, address) VALUES (?, ?, ?);`, [m.id_market || m.id, m.name_market || m.name || "-", m.address || m.location || "-"]);
       }
-      console.log("✅ Data pasar berhasil disimpan");
+      console.log("✅ Data markets saved");
     }
 
-    console.log("📡 Sinkronisasi selesai");
+    console.log("📡 Sync from server finished");
   } catch (err) {
-    console.error("❌ Gagal sync data:", err);
+    console.error("❌ Sync from server error:", err);
     throw err;
   }
 };
 
-// ====================================
-// 💾 Tambah Data Harga
-// ====================================
+// -----------------------------
+// Add Price (used when UI adds a price directly)
+// -----------------------------
 export const addPrice = async (commodityId, categoryId, price) => {
   const db = await getDatabase();
   const state = await NetInfo.fetch();
-  const isOnline = state.isConnected;
+  const isOnline = state.isInternetReachable === true;
   const token = await AsyncStorage.getItem("token");
-  const now = new Date().toISOString();
 
-  const commodity = await db.getFirstAsync(`SELECT name_commodity, unit FROM commodities WHERE id = ?;`, [commodityId]);
-  const category = await db.getFirstAsync(`SELECT name_category FROM categories WHERE id = ?;`, [categoryId]);
-  // fallback unit jika null
-  const unit = commodity?.unit || "kg";
+  const commodity = await db.getFirstAsync(`SELECT name_commodity, unit_id FROM commodities WHERE id_commodity = ?`, [commodityId]);
+  const category = await db.getFirstAsync(`SELECT name_category FROM categories WHERE id_category = ?`, [categoryId]);
+  const unitRow = await db.getFirstAsync(`SELECT name_unit FROM units WHERE id = ?`, [commodity?.unit_id]);
+  const unit = unitRow?.name_unit ?? "pcs";
+  const now = new Date().toISOString();
 
   if (isOnline && token) {
     try {
-      const res = await fetch(api.ADD_PRICE, {
+      // Prefer single-sync API if available (api.SYNC_PRICE), else try api.ADD_PRICE
+      const endpoint = api.SYNC_PRICE || api.SYNC_SINGLE || api.ADD_PRICE || api.SYNC;
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ commodity_id: commodityId, price }),
       });
 
       if (res.ok) {
-        await db.runAsync(
-          `INSERT INTO local_prices (commodity_id, category_id, price, unit, created_at, synced)
-           VALUES (?, ?, ?, ?, ?, 1);`,
-          [commodityId, categoryId, price, unit, now]
-        );
-
-        await addRiwayatPendataan({
-          name_commodity: commodity?.name_commodity || `Komoditas ${commodityId}`,
-          price,
-          unit,
-          name_category: category?.name_category || "-",
-          tanggal: now,
-        });
-
-        console.log("✅ Data online tersimpan & masuk riwayat");
+        await db.runAsync(`INSERT INTO local_prices (commodity_id, category_id, price, unit, created_at, synced) VALUES (?, ?, ?, ?, ?, 1);`, [commodityId, categoryId, price, unit, now]);
+        await addRiwayatPendataan({ name_commodity: commodity?.name_commodity || `Komoditas ${commodityId}`, price, unit, name_category: category?.name_category || "-", tanggal: now });
         return;
       } else {
-        console.warn("⚠️ Respon server addPrice bukan OK:", res.status);
+        console.warn("⚠ addPrice: server returned", res.status);
       }
     } catch (err) {
-      console.warn("⚠️ Gagal kirim ke server:", err);
+      console.warn("⚠ Online addPrice error:", err);
     }
   }
 
   // Offline fallback
-  await db.runAsync(
-    `INSERT INTO local_prices (commodity_id, category_id, price, unit, created_at, synced)
-     VALUES (?, ?, ?, ?, ?, 0);`,
-    [commodityId, categoryId, price, unit, now]
-  );
-  console.log("📦 Data offline disimpan (belum tersinkron)");
+  await db.runAsync(`INSERT INTO local_prices (commodity_id, category_id, price, unit, created_at, synced) VALUES (?, ?, ?, ?, ?, 0);`, [commodityId, categoryId, price, unit, now]);
 };
 
-// ====================================
-// 🔄 Sinkronisasi Harga Lokal ke Server
-// ====================================
+// -----------------------------
+// Sync local prices to server
+// - try batch endpoint (api.SYNC)
+// - if batch fails, fallback to single-item endpoint (api.SYNC_PRICE or api.ADD_PRICE)
+// -----------------------------
 export const syncPricesToServer = async () => {
   try {
     const db = await getDatabase();
     const token = await AsyncStorage.getItem("token");
-    if (!token) throw new Error("Token tidak ditemukan");
+    if (!token) {
+      console.warn("⚠ syncPricesToServer: token not found");
+      return;
+    }
 
     const unsynced = await db.getAllAsync(`SELECT * FROM local_prices WHERE synced = 0;`);
-    if (!unsynced?.length) return console.log("✅ Tidak ada data lokal yang perlu disinkron");
+    if (!unsynced?.length) return console.log("✅ No unsynced local prices");
 
-    for (const item of unsynced) {
+    // Build payload for batch sync (map to server expected shape)
+    const batchPayload = unsynced.map((it) => ({
+      commodity_id: it.commodity_id,
+      price: it.price,
+      category_id: it.category_id,
+      created_at: it.created_at,
+      local_id: it.id, // include local id for server ack if needed
+    }));
+
+    // Try batch endpoint first (api.SYNC)
+    const batchEndpoint = api.SYNC || api.SYNC_BATCH || "/api/sync";
+    try {
+      const res = await fetch(batchEndpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ data: batchPayload }),
+      });
+
+      if (res.ok) {
+        // mark all as synced
+        for (const it of unsynced) {
+          await db.runAsync(`UPDATE local_prices SET synced = 1 WHERE id = ?;`, [it.id]);
+
+          const commodity = await db.getFirstAsync(`SELECT name_commodity FROM commodities WHERE id_commodity = ?`, [it.commodity_id]);
+          const category = await db.getFirstAsync(`SELECT name_category FROM categories WHERE id_category = ?`, [it.category_id]);
+
+          await addRiwayatPendataan({
+            name_commodity: commodity?.name_commodity || `Komoditas ${it.commodity_id}`,
+            price: it.price,
+            unit: it.unit || "-",
+            name_category: category?.name_category || "-",
+            tanggal: it.created_at,
+          });
+        }
+        console.log("✅ Batch sync succeeded for", unsynced.length, "items");
+        return;
+      } else {
+        const txt = await res.text().catch(() => "");
+        console.warn("⚠ Batch sync failed:", res.status, txt);
+        // fall through to single-item fallback
+      }
+    } catch (err) {
+      console.warn("⚠ Batch sync endpoint error:", err);
+      // fall through to single-item fallback
+    }
+
+    // ---------- single-item fallback ----------
+    const singleEndpoint = api.SYNC_PRICE || api.SYNC_SINGLE || api.ADD_PRICE || "/api/prices";
+    for (const it of unsynced) {
       try {
-        const res = await fetch(api.SYNC_PRICES, {
+        const res = await fetch(singleEndpoint, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ commodity_id: item.commodity_id, price: item.price }),
+          body: JSON.stringify({ commodity_id: it.commodity_id, price: it.price }),
         });
 
         if (res.ok) {
-          await db.runAsync(`UPDATE local_prices SET synced = 1 WHERE id = ?;`, [item.id]);
+          await db.runAsync(`UPDATE local_prices SET synced = 1 WHERE id = ?;`, [it.id]);
 
-          const commodity = await db.getFirstAsync(`SELECT name_commodity FROM commodities WHERE id = ?;`, [item.commodity_id]);
-          const category = await db.getFirstAsync(`SELECT name_category FROM categories WHERE id = ?;`, [item.category_id]);
+          const commodity = await db.getFirstAsync(`SELECT name_commodity FROM commodities WHERE id_commodity = ?`, [it.commodity_id]);
+          const category = await db.getFirstAsync(`SELECT name_category FROM categories WHERE id_category = ?`, [it.category_id]);
+
           await addRiwayatPendataan({
-            name_commodity: commodity?.name_commodity || `Komoditas ${item.commodity_id}`,
-            price: item.price,
-            unit: item.unit || "-",
+            name_commodity: commodity?.name_commodity || `Komoditas ${it.commodity_id}`,
+            price: it.price,
+            unit: it.unit || "-",
             name_category: category?.name_category || "-",
-            tanggal: item.created_at,
+            tanggal: it.created_at,
           });
 
-          console.log(`✅ Data lokal ID ${item.id} tersinkron & masuk riwayat`);
+          console.log(`✅ Synced item local id ${it.id}`);
         } else {
-          console.warn("⚠️ syncPricesToServer: server returned", res.status);
+          const txt = await res.text().catch(() => "");
+          console.warn(`⚠ Single sync failed for id ${it.id}:`, res.status, txt);
         }
       } catch (err) {
-        console.warn("⚠️ Gagal sinkron item ID", item.id, err);
+        console.warn("⚠ Single sync error for id", it.id, err);
       }
     }
   } catch (err) {
-    console.error("❌ Gagal sync harga:", err);
+    console.error("❌ syncPricesToServer fatal:", err);
   }
 };
 
-// ====================================
-// 🔹 Wrapper untuk sinkronisasi
-// ====================================
 export const syncDataToServer = async () => {
-  await syncPricesToServer();
+  return syncPricesToServer();
 };
 
-// ====================================
-// 🧾 Riwayat Hapus & Pendataan
-// ====================================
+// -----------------------------
+// Riwayat helpers
+// -----------------------------
 export const addRiwayatHapus = async (item) => {
   const db = await getDatabase();
-  await db.runAsync(
-    `INSERT INTO riwayat_hapus (name_commodity, price, unit, name_category, tanggal)
-     VALUES (?, ?, ?, ?, ?);`,
-    [item.name_commodity, item.price, item.unit, item.name_category, item.tanggal]
-  );
-};
-
-export const getRiwayatHapus = async () => {
-  const db = await getDatabase();
-  return await db.getAllAsync(`SELECT * FROM riwayat_hapus ORDER BY id DESC;`);
+  await db.runAsync(`INSERT INTO riwayat_hapus (name_commodity, price, unit, name_category, tanggal) VALUES (?, ?, ?, ?, ?);`, [item.name_commodity, item.price, item.unit, item.name_category, item.tanggal]);
 };
 
 export const addRiwayatPendataan = async (item) => {
   const db = await getDatabase();
-  await db.runAsync(
-    `INSERT INTO riwayat_pendataan (name_commodity, price, unit, name_category, tanggal)
-     VALUES (?, ?, ?, ?, ?);`,
-    [item.name_commodity, item.price, item.unit, item.name_category, item.tanggal]
-  );
+  await db.runAsync(`INSERT INTO riwayat_pendataan (name_commodity, price, unit, name_category, tanggal) VALUES (?, ?, ?, ?, ?);`, [item.name_commodity, item.price, item.unit, item.name_category, item.tanggal]);
 };
 
 export const getAllRiwayatPendataan = async () => {
   const db = await getDatabase();
-  return await db.getAllAsync(`
-    SELECT id, name_commodity, price, unit, name_category, tanggal
-    FROM riwayat_pendataan
-    ORDER BY tanggal DESC;
-  `);
+  return db.getAllAsync(`SELECT * FROM riwayat_pendataan ORDER BY tanggal DESC;`);
 };
 
-// ====================================
-// 💾 Ambil Data Lokal / Dashboard / Helper
-// ====================================
+// -----------------------------
+// Dashboard / screen helpers
+// -----------------------------
 export const getAllLocalPrices = async () => {
   const db = await getDatabase();
-  return await db.getAllAsync(`
-    SELECT 
-      p.id, 
-      c.name_category, 
-      co.id AS commodity_id,
-      co.name_commodity AS name_commodity, 
-      p.price, 
-      p.unit, 
-      p.synced, 
-      p.created_at AS tanggal,
-      co.local_image AS local_image,
-      co.image AS image
+  return db.getAllAsync(`
+    SELECT
+      p.id,
+      p.commodity_id,
+      p.category_id,
+      p.price,
+      p.unit,
+      p.synced,
+      p.created_at,
+      co.id_commodity,
+      co.name_commodity,
+      co.image,
+      co.local_image,
+      co.unit_id,
+      c.name_category,
+      u.name_unit
     FROM local_prices p
-    JOIN categories c ON p.category_id = c.id
-    JOIN commodities co ON p.commodity_id = co.id
+    LEFT JOIN commodities co ON p.commodity_id = co.id_commodity
+    LEFT JOIN categories c ON p.category_id = c.id_category
+    LEFT JOIN units u ON co.unit_id = u.id
     ORDER BY p.created_at DESC;
   `);
 };
@@ -506,55 +610,47 @@ export const getAllLocalPrices = async () => {
 export const deleteLocalPrice = async (id, itemData = null) => {
   const db = await getDatabase();
   if (itemData) {
-    await addRiwayatHapus({
-      name_commodity: itemData.name_commodity || "Tidak diketahui",
-      price: itemData.price || 0,
-      unit: itemData.unit || "-",
-      name_category: itemData.name_category || "-",
-      tanggal: new Date().toISOString(),
-    });
+    await addRiwayatHapus({ name_commodity: itemData.name_commodity, price: itemData.price, unit: itemData.unit, name_category: itemData.name_category, tanggal: new Date().toISOString() });
   }
   await db.runAsync(`DELETE FROM local_prices WHERE id = ?;`, [id]);
 };
 
 export const getCategories = async () => {
   const db = await getDatabase();
-  return await db.getAllAsync(`SELECT * FROM categories;`);
+  return db.getAllAsync(`SELECT * FROM categories;`);
 };
 
 export const getCommoditiesByCategory = async (categoryId) => {
   const db = await getDatabase();
-  return await db.getAllAsync(`SELECT * FROM commodities WHERE category_id = ?;`, [categoryId]);
+  return db.getAllAsync(`SELECT id_commodity, name_commodity AS name, image, local_image, unit_id, category_id FROM commodities WHERE category_id = ?;`, [categoryId]);
 };
 
 export const getDashboardStats = async () => {
   const db = await getDatabase();
-  const totalPrices = await db.getFirstAsync(`SELECT COUNT(*) AS total FROM local_prices;`);
-  const offlineCount = await db.getFirstAsync(`SELECT COUNT(*) AS offline FROM local_prices WHERE synced = 0;`);
-  const onlineCount = await db.getFirstAsync(`SELECT COUNT(*) AS online FROM local_prices WHERE synced = 1;`);
-
-  return {
-    total: totalPrices?.total || 0,
-    offline: offlineCount?.offline || 0,
-    online: onlineCount?.online || 0,
-  };
+  const total = await db.getFirstAsync(`SELECT COUNT(*) AS total FROM local_prices;`);
+  const offline = await db.getFirstAsync(`SELECT COUNT(*) AS offline FROM local_prices WHERE synced = 0;`);
+  const online = await db.getFirstAsync(`SELECT COUNT(*) AS online FROM local_prices WHERE synced = 1;`);
+  return { total: total?.total ?? 0, offline: offline?.offline ?? 0, online: online?.online ?? 0 };
 };
 
 export const getLatestPrices = async (limit = 20) => {
   const db = await getDatabase();
-  return await db.getAllAsync(`
-    SELECT 
-      co.id AS commodity_id,
-      co.name_commodity, 
-      c.name_category, 
-      p.price, 
-      p.unit, 
+  return db.getAllAsync(`
+    SELECT
+      p.id,
+      co.id_commodity,
+      co.name_commodity,
+      c.name_category,
+      p.price,
+      p.unit,
       p.created_at AS tanggal,
-      co.local_image AS local_image,
-      co.image AS image
+      co.local_image,
+      co.image,
+      u.name_unit
     FROM local_prices p
-    JOIN commodities co ON p.commodity_id = co.id
-    JOIN categories c ON p.category_id = c.id
+    LEFT JOIN commodities co ON p.commodity_id = co.id_commodity
+    LEFT JOIN categories c ON p.category_id = c.id_category
+    LEFT JOIN units u ON co.unit_id = u.id
     ORDER BY p.created_at DESC
     LIMIT ?;
   `, [limit]);
@@ -563,43 +659,33 @@ export const getLatestPrices = async (limit = 20) => {
 export const getLocalPricesForScreen = async (categoryId = null, commodityId = null) => {
   const db = await getDatabase();
   let query = `
-    SELECT 
+    SELECT
       p.id,
-      co.id AS commodity_id,
+      co.id_commodity,
       co.name_commodity,
       c.name_category,
       p.price,
       p.unit,
       p.synced,
       p.created_at AS tanggal,
-      co.local_image AS local_image,
-      co.image AS image
+      co.local_image,
+      co.image,
+      u.name_unit
     FROM local_prices p
-    JOIN categories c ON p.category_id = c.id
-    JOIN commodities co ON p.commodity_id = co.id
+    LEFT JOIN categories c ON p.category_id = c.id_category
+    LEFT JOIN commodities co ON p.commodity_id = co.id_commodity
+    LEFT JOIN units u ON co.unit_id = u.id
     WHERE 1=1
   `;
   const params = [];
-
-  if (categoryId) {
-    query += ` AND p.category_id = ?`;
-    params.push(categoryId);
-  }
-
-  if (commodityId) {
-    query += ` AND p.commodity_id = ?`;
-    params.push(commodityId);
-  }
-
+  if (categoryId) { query += ` AND p.category_id = ?`; params.push(categoryId); }
+  if (commodityId) { query += ` AND p.commodity_id = ?`; params.push(commodityId); }
   query += ` ORDER BY p.created_at DESC;`;
-  return await db.getAllAsync(query, params);
+  return db.getAllAsync(query, params);
 };
 
-// Hitung komoditas unik
 export const countUniqueCommodities = async () => {
   const db = await getDatabase();
-  const result = await db.getFirstAsync(`
-    SELECT COUNT(DISTINCT commodity_id) AS total FROM local_prices;
-  `);
+  const result = await db.getFirstAsync(`SELECT COUNT(DISTINCT commodity_id) AS total FROM local_prices;`);
   return result?.total ?? 0;
 };
