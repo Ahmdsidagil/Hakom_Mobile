@@ -5,6 +5,11 @@
 // - robust migration helper
 // - NetInfo uses isInternetReachable
 // - batch sync with single-item fallback
+// Improvements:
+// - single sync lock (isSyncing) to avoid concurrent syncs/duplicates
+// - debounce small delay for NetInfo auto-sync
+// - mark synced in batch via IN (...) for safety & performance
+// - duplicate-insert short-window guard in addPrice (prevents double-tap)
 // ====================================
 
 import * as SQLite from "expo-sqlite";
@@ -15,6 +20,8 @@ import api from "./api";
 
 let db;
 let netListenerAdded = false;
+let isSyncing = false; // lock to prevent concurrent syncs
+let netDebounceTimer = null;
 
 const openDb = () => {
   if (!db) db = SQLite.openDatabaseSync("local_market.db");
@@ -113,10 +120,13 @@ export const initDatabase = async () => {
 
   if (!netListenerAdded) {
     NetInfo.addEventListener((state) => {
+      // debounce briefly to avoid multiple quick triggers when connectivity toggles
       if (state.isInternetReachable === true) {
-        console.log("🌐 Internet reachable — starting auto-sync");
-        // don't await here — function manages its own errors/logging
-        syncPricesToServer().catch((e) => console.warn("Auto sync error:", e));
+        if (netDebounceTimer) clearTimeout(netDebounceTimer);
+        netDebounceTimer = setTimeout(() => {
+          console.log("🌐 Internet reachable — starting auto-sync (debounced)");
+          syncPricesToServer().catch((e) => console.warn("Auto sync error:", e));
+        }, 400); // 400ms debounce
       }
     });
     netListenerAdded = true;
@@ -416,6 +426,7 @@ export const syncFromServer = async () => {
 
 // -----------------------------
 // Add Price (used when UI adds a price directly)
+// - includes duplicate-guard for quick double-tap inserts
 // -----------------------------
 export const addPrice = async (commodityId, categoryId, price) => {
   const db = await getDatabase();
@@ -429,9 +440,27 @@ export const addPrice = async (commodityId, categoryId, price) => {
   const unit = unitRow?.name_unit ?? "pcs";
   const now = new Date().toISOString();
 
+  // Quick duplicate guard: if last record for same commodity+price is within 3 seconds, skip insert
+  try {
+    const last = await db.getFirstAsync(
+      `SELECT id, created_at FROM local_prices WHERE commodity_id = ? AND price = ? ORDER BY created_at DESC LIMIT 1;`,
+      [commodityId, price]
+    );
+    if (last && last.created_at) {
+      const lastTime = new Date(last.created_at).getTime();
+      const nowTime = Date.now();
+      if (nowTime - lastTime < 3000) {
+        console.log("ℹ️ Skipping near-duplicate addPrice (within 3s)");
+        return;
+      }
+    }
+  } catch (e) {
+    // ignore check errors and continue insert
+  }
+
   if (isOnline && token) {
     try {
-      // Prefer single-sync API if available (api.SYNC_PRICE), else try api.ADD_PRICE
+      // Prefer single-sync API if available (api.SYNC_PRICE), else try api.ADD_PRICE or api.SYNC
       const endpoint = api.SYNC_PRICE || api.SYNC_SINGLE || api.ADD_PRICE || api.SYNC;
       const res = await fetch(endpoint, {
         method: "POST",
@@ -440,8 +469,14 @@ export const addPrice = async (commodityId, categoryId, price) => {
       });
 
       if (res.ok) {
-        await db.runAsync(`INSERT INTO local_prices (commodity_id, category_id, price, unit, created_at, synced) VALUES (?, ?, ?, ?, ?, 1);`, [commodityId, categoryId, price, unit, now]);
+        // In many backends we may receive server id — but to be safe we mark local as synced
+        await db.runAsync(
+          `INSERT INTO local_prices (commodity_id, category_id, price, unit, created_at, synced) VALUES (?, ?, ?, ?, ?, 1);`,
+          [commodityId, categoryId, price, unit, now]
+        );
+
         await addRiwayatPendataan({ name_commodity: commodity?.name_commodity || `Komoditas ${commodityId}`, price, unit, name_category: category?.name_category || "-", tanggal: now });
+        console.log("✅ addPrice: inserted as synced (online).");
         return;
       } else {
         console.warn("⚠ addPrice: server returned", res.status);
@@ -451,16 +486,37 @@ export const addPrice = async (commodityId, categoryId, price) => {
     }
   }
 
-  // Offline fallback
-  await db.runAsync(`INSERT INTO local_prices (commodity_id, category_id, price, unit, created_at, synced) VALUES (?, ?, ?, ?, ?, 0);`, [commodityId, categoryId, price, unit, now]);
+  // Offline fallback (or if online failed)
+  await db.runAsync(
+    `INSERT INTO local_prices (commodity_id, category_id, price, unit, created_at, synced) VALUES (?, ?, ?, ?, ?, 0);`,
+    [commodityId, categoryId, price, unit, now]
+  );
+};
+
+// -----------------------------
+// Helper to mark multiple local ids as synced (secure batch update)
+// -----------------------------
+const markLocalIdsAsSynced = async (ids = []) => {
+  if (!ids || !ids.length) return;
+  const db = await getDatabase();
+  // build placeholders
+  const placeholders = ids.map(() => "?").join(",");
+  const sql = `UPDATE local_prices SET synced = 1 WHERE id IN (${placeholders});`;
+  await db.runAsync(sql, ids);
 };
 
 // -----------------------------
 // Sync local prices to server
 // - try batch endpoint (api.SYNC)
 // - if batch fails, fallback to single-item endpoint (api.SYNC_PRICE or api.ADD_PRICE)
+// - uses isSyncing lock to avoid concurrent runs which cause duplicates
 // -----------------------------
 export const syncPricesToServer = async () => {
+  if (isSyncing) {
+    console.log("⏳ syncPricesToServer: already running, skipping duplicate call");
+    return;
+  }
+  isSyncing = true;
   try {
     const db = await getDatabase();
     const token = await AsyncStorage.getItem("token");
@@ -491,21 +547,27 @@ export const syncPricesToServer = async () => {
       });
 
       if (res.ok) {
-        // mark all as synced
+        // If server accepted batch, mark all unsynced as synced (by local ids)
+        const ids = unsynced.map((it) => it.id);
+        await markLocalIdsAsSynced(ids);
+
+        // add riwayat for each
         for (const it of unsynced) {
-          await db.runAsync(`UPDATE local_prices SET synced = 1 WHERE id = ?;`, [it.id]);
-
-          const commodity = await db.getFirstAsync(`SELECT name_commodity FROM commodities WHERE id_commodity = ?`, [it.commodity_id]);
-          const category = await db.getFirstAsync(`SELECT name_category FROM categories WHERE id_category = ?`, [it.category_id]);
-
-          await addRiwayatPendataan({
-            name_commodity: commodity?.name_commodity || `Komoditas ${it.commodity_id}`,
-            price: it.price,
-            unit: it.unit || "-",
-            name_category: category?.name_category || "-",
-            tanggal: it.created_at,
-          });
+          try {
+            const commodity = await db.getFirstAsync(`SELECT name_commodity FROM commodities WHERE id_commodity = ?`, [it.commodity_id]);
+            const category = await db.getFirstAsync(`SELECT name_category FROM categories WHERE id_category = ?`, [it.category_id]);
+            await addRiwayatPendataan({
+              name_commodity: commodity?.name_commodity || `Komoditas ${it.commodity_id}`,
+              price: it.price,
+              unit: it.unit || "-",
+              name_category: category?.name_category || "-",
+              tanggal: it.created_at,
+            });
+          } catch (e) {
+            console.warn("⚠ addRiwayatPendataan failed for item after batch sync:", e);
+          }
         }
+
         console.log("✅ Batch sync succeeded for", unsynced.length, "items");
         return;
       } else {
@@ -553,6 +615,8 @@ export const syncPricesToServer = async () => {
     }
   } catch (err) {
     console.error("❌ syncPricesToServer fatal:", err);
+  } finally {
+    isSyncing = false;
   }
 };
 
@@ -609,6 +673,17 @@ export const getAllLocalPrices = async () => {
 
 export const deleteLocalPrice = async (id, itemData = null) => {
   const db = await getDatabase();
+  if (!itemData) {
+    itemData = await db.getFirstAsync(
+      `SELECT p.price, p.unit, co.name_commodity, c.name_category
+       FROM local_prices p
+       LEFT JOIN commodities co ON p.commodity_id = co.id_commodity
+       LEFT JOIN categories c ON p.category_id = c.id_category
+       WHERE p.id = ? LIMIT 1`,
+      [id]
+    );
+  }
+
   if (itemData) {
     await addRiwayatHapus({ name_commodity: itemData.name_commodity, price: itemData.price, unit: itemData.unit, name_category: itemData.name_category, tanggal: new Date().toISOString() });
   }
