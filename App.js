@@ -11,9 +11,11 @@ import InputScreen from "./src/screens/InputScreen";
 import ProfileScreen from "./src/screens/ProfileScreen";
 import NotificationScreen from "./src/screens/NotificationScreen";
 import DataLocalScreen from "./src/screens/DataLocalScreen";
+import DetailHargaScreen from "./src/screens/DetailHargaScreen";
 import RiwayatScreen from "./src/screens/RiwayatScreen";
 import EditDataScreen from "./src/screens/EditDataScreen";
 import UbahKataSandiScreen from "./src/screens/UbahKataSandi";
+
 
 // Import context provider
 import { NotificationProvider } from "./src/context/NotificationContext";
@@ -51,6 +53,7 @@ export default function App() {
           <Stack.Screen name="Profile" component={ProfileScreen} />
           <Stack.Screen name="Notification" component={NotificationScreen} />
           <Stack.Screen name="DataLocal" component={DataLocalScreen} />
+          <Stack.Screen name="DetailHarga" component={DetailHargaScreen} />
           <Stack.Screen name="Riwayat" component={RiwayatScreen} />
           <Stack.Screen name="EditData" component={EditDataScreen} />
           <Stack.Screen name="UbahKataSandi" component={UbahKataSandiScreen} />

@@ -1,5 +1,5 @@
 // ===============================
-// 📱 InputScreen.js (FINAL CLEAN VERSION - NO DUPLIKAT INSERT)
+// 📱 InputScreen.js (FINAL + Optimistic Update)
 // ===============================
 import React, { useEffect, useState, useRef } from "react";
 import {
@@ -27,12 +27,12 @@ import {
 
 // 🔥 LOCAL IMAGES UNTUK KATEGORI (sesuaikan backend)
 const categoryImages = {
-  Sayuran: require("../assets/sayuran.jpg"),
+  Sayurann: require("../assets/sayuran.jpg"),
   Beras: require("../assets/beras.jpg"),
   Bumbu: require("../assets/bumbu.jpg"),
 };
 
-export default function InputScreen({ navigation }) {
+export default function InputScreen({ navigation, route }) {
   const [categories, setCategories] = useState([]);
   const [commodities, setCommodities] = useState([]);
 
@@ -58,12 +58,14 @@ export default function InputScreen({ navigation }) {
   const loadData = async () => {
     try {
       const cats = await getCategories();
-      setCategories(cats);
+      setCategories(cats || []);
 
       const all = [];
-      for (const cat of cats) {
-        const res = await getCommoditiesByCategory(cat.id_category);
-        all.push(...res);
+      if (cats && cats.length) {
+        for (const cat of cats) {
+          const res = await getCommoditiesByCategory(cat.id_category);
+          if (res && res.length) all.push(...res);
+        }
       }
       setCommodities(all);
     } catch (err) {
@@ -110,9 +112,7 @@ export default function InputScreen({ navigation }) {
 
     if (
       selectedCommodity &&
-      !updated.some(
-        (c) => c.id_category === selectedCommodity.category_id
-      )
+      !updated.some((c) => c.id_category === selectedCommodity.category_id)
     ) {
       setSelectedCommodity(null);
       setUnit("");
@@ -124,7 +124,7 @@ export default function InputScreen({ navigation }) {
   // ===============================
   const handleSelectCommodity = (item) => {
     setSelectedCommodity(item);
-    setUnit(item.name_unit);
+    setUnit(item.name_unit || "");
   };
 
   // ===============================
@@ -153,7 +153,7 @@ export default function InputScreen({ navigation }) {
   };
 
   // ===============================
-  // SIMPAN HARGA (NO DUPLIKAT)
+  // SIMPAN HARGA (NO DUPLIKAT + OPTIMISTIC UPDATE)
   // ===============================
   const handleSubmit = async () => {
     if (selectedCategories.length === 0 || !selectedCommodity || !price) {
@@ -178,11 +178,12 @@ export default function InputScreen({ navigation }) {
           "Peringatan",
           "Komoditas tidak sesuai dengan kategori yang dipilih."
         );
+        setLoading(false);
         return;
       }
 
       // ============== SAVE KE DB ==============
-      await addPrice(
+      const newPriceId = await addPrice(
         selectedCommodity.id_commodity,
         selectedCommodity.category_id,
         priceNum
@@ -198,14 +199,31 @@ export default function InputScreen({ navigation }) {
       await pushNotification({
         type: "success",
         title: "Pendataan Berhasil",
-        message: `${selectedCommodity.name} telah ditambahkan`,
+        message: `${selectedCommodity.name || selectedCommodity.name_commodity} telah ditambahkan`,
       });
 
+      // ============================
+      // 🔥 OPTIMISTIC UPDATE KE DataLocalScreen
+      // ============================
+      if (route?.params?.onAddPrice) {
+        route.params.onAddPrice({
+          id_price: newPriceId,
+          commodity_id: selectedCommodity.id_commodity,
+          name_commodity: selectedCommodity.name || selectedCommodity.name_commodity,
+          price: priceNum,
+          name_unit: selectedCommodity.name_unit || "-",
+          created_at: new Date().toISOString(),
+          name_category: selectedCommodity.category_name || "-",
+          image: selectedCommodity.image || null,
+          synced: net.isConnected,
+        });
+      }
+
+      // Bersihkan input
       setPrice("");
 
-      // ❌ FIX DUplikasi: HAPUS CALLBACK
-      // (route?.params?.onAddPrice && route.params.onAddPrice());
-
+      // Kembali ke screen sebelumnya
+      navigation.goBack();
     } catch (err) {
       console.error(err);
       showSnackbar("❌ Terjadi kesalahan");
@@ -241,7 +259,6 @@ export default function InputScreen({ navigation }) {
       </View>
 
       <ScrollView ref={scrollRef} contentContainerStyle={styles.page}>
-        
         {/* ================= CATEGORY ================= */}
         <Text style={styles.title}>Pilih Kategori</Text>
         <View style={styles.grid}>
@@ -249,29 +266,15 @@ export default function InputScreen({ navigation }) {
             const selected = selectedCategories.some(
               (c) => c.id_category === cat.id_category
             );
-
             const img = categoryImages[cat.name_category];
-
             return (
               <TouchableOpacity
                 key={cat.id_category}
                 style={[styles.gridBoxSmall, selected && styles.activeGridBox]}
                 onPress={() => toggleCategory(cat)}
               >
-                {img && (
-                  <Image
-                    source={img}
-                    style={{ width: 45, height: 45, borderRadius: 8 }}
-                    resizeMode="cover"
-                  />
-                )}
-                <Text
-                  style={[
-                    styles.boxLabel,
-                    { color: selected ? "#fff" : "#174A6A" },
-                  ]}
-                  numberOfLines={2}
-                >
+                {img && <Image source={img} style={{ width: 45, height: 45, borderRadius: 8 }} />}
+                <Text style={[styles.boxLabel, { color: selected ? "#fff" : "#174A6A" }]} numberOfLines={2}>
                   {cat.name_category}
                 </Text>
               </TouchableOpacity>
@@ -285,8 +288,7 @@ export default function InputScreen({ navigation }) {
             <Text style={[styles.title, { marginTop: 15 }]}>Pilih Komoditas</Text>
             <View style={styles.grid}>
               {filteredCommodities.map((item) => {
-                const active =
-                  selectedCommodity?.id_commodity === item.id_commodity;
+                const active = selectedCommodity?.id_commodity === item.id_commodity;
                 return (
                   <TouchableOpacity
                     key={item.id_commodity}
@@ -305,10 +307,7 @@ export default function InputScreen({ navigation }) {
                       resizeMode="cover"
                     />
                     <Text
-                      style={[
-                        styles.boxLabel,
-                        { color: active ? "#fff" : "#174A6A", fontSize: 10 },
-                      ]}
+                      style={[styles.boxLabel, { color: active ? "#fff" : "#174A6A", fontSize: 10 }]}
                       numberOfLines={2}
                     >
                       {item.name}
@@ -354,9 +353,7 @@ export default function InputScreen({ navigation }) {
               onPress={handleSubmit}
               disabled={loading}
             >
-              <Text style={styles.buttonText}>
-                {loading ? "Menyimpan..." : "Simpan"}
-              </Text>
+              <Text style={styles.buttonText}>{loading ? "Menyimpan..." : "Simpan"}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -404,24 +401,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
-  headerTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "700",
-    marginLeft: 10,
-  },
+  headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700", marginLeft: 10 },
   page: { padding: 20, paddingBottom: 80 },
-  title: {
-    fontSize: 16,
-    fontWeight: "700",
-    marginBottom: 10,
-    color: "#174A6A",
-  },
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-  },
+  title: { fontSize: 16, fontWeight: "700", marginBottom: 10, color: "#174A6A" },
+  grid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" },
   gridBoxSmall: {
     width: "23%",
     aspectRatio: 1,
@@ -435,37 +418,12 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   activeGridBox: { backgroundColor: "#174A6A" },
-  boxLabel: {
-    fontSize: 11,
-    marginTop: 6,
-    textAlign: "center",
-    fontWeight: "600",
-  },
+  boxLabel: { fontSize: 11, marginTop: 6, textAlign: "center", fontWeight: "600" },
   row: { flexDirection: "row" },
   label: { fontSize: 14, fontWeight: "600", marginBottom: 4 },
-  input: {
-    borderWidth: 1,
-    borderColor: "#174A6A",
-    borderRadius: 10,
-    padding: 10,
-    backgroundColor: "#fff",
-  },
-  button: {
-    marginTop: 20,
-    backgroundColor: "#174A6A",
-    padding: 14,
-    borderRadius: 10,
-    alignItems: "center",
-  },
+  input: { borderWidth: 1, borderColor: "#174A6A", borderRadius: 10, padding: 10, backgroundColor: "#fff" },
+  button: { marginTop: 20, backgroundColor: "#174A6A", padding: 14, borderRadius: 10, alignItems: "center" },
   buttonText: { color: "#fff", fontWeight: "700" },
-  snackbar: {
-    position: "absolute",
-    bottom: 25,
-    left: 20,
-    right: 20,
-    backgroundColor: "#16A34A",
-    padding: 12,
-    borderRadius: 10,
-  },
+  snackbar: { position: "absolute", bottom: 25, left: 20, right: 20, backgroundColor: "#16A34A", padding: 12, borderRadius: 10 },
   snackbarText: { color: "#fff", fontWeight: "700", textAlign: "center" },
 });

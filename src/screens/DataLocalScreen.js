@@ -1,5 +1,7 @@
-// src/screens/DataLocalScreen.js
-import React, { useState, useCallback, useEffect } from "react";
+// ===============================
+// 📱 DataLocalScreen.js (FINAL FIX - Harga langsung muncul)
+// ===============================
+import React, { useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -27,7 +29,7 @@ import {
 } from "../../config/database";
 
 // ========================
-// 🔥 MERGE TANPA DUPLIKASI
+// 🔥 MERGE DATA TANPA DUPLIKASI
 // ========================
 const mergeServerAndLocal = (serverRows, localRows) => {
   const merged = [];
@@ -35,9 +37,11 @@ const mergeServerAndLocal = (serverRows, localRows) => {
 
   const isCloseTime = (t1, t2) => {
     try {
+      if (!t1 || !t2) return false;
       const a = new Date(t1).getTime();
       const b = new Date(t2).getTime();
-      return Math.abs(a - b) <= 180000; // 3 menit toleransi
+      if (isNaN(a) || isNaN(b)) return false;
+      return Math.abs(a - b) <= 180000; // 3 menit
     } catch {
       return false;
     }
@@ -56,7 +60,7 @@ const mergeServerAndLocal = (serverRows, localRows) => {
 
       if (
         (s.name_commodity ?? "").trim().toLowerCase() ===
-        (l.name_commodity ?? "").trim().toLowerCase() &&
+          (l.name_commodity ?? "").trim().toLowerCase() &&
         Number(s.price) === Number(l.price) &&
         isCloseTime(s.created_at, l.created_at)
       ) {
@@ -66,22 +70,23 @@ const mergeServerAndLocal = (serverRows, localRows) => {
     }
 
     if (matchedLocal) usedLocal.add(matchedLocal);
-
-    merged.push(s); // server tetap dipakai
+    merged.push(s);
   }
 
-  // Tambahkan lokal yang belum dipakai
   for (const l of localRows) {
     if (!usedLocal.has(l)) merged.push(l);
   }
 
-  // Urutkan final
-  merged.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  merged.sort((a, b) => {
+    const aTime = new Date(a.created_at).getTime();
+    const bTime = new Date(b.created_at).getTime();
+    return (isNaN(bTime) ? 0 : bTime) - (isNaN(aTime) ? 0 : aTime);
+  });
 
   return merged;
 };
 
-// Fetch Server
+// Ambil data server
 const getSyncedPricesFromServer = async () => {
   try {
     const token = await AsyncStorage.getItem("token");
@@ -100,13 +105,13 @@ const getSyncedPricesFromServer = async () => {
       name_commodity: item.name_commodity,
       price: item.price,
       name_unit: item.name_unit || "-",
-      created_at: item.created_at,
+      created_at: item.created_at || new Date().toISOString(),
       name_category: item.name_category || "Lainnya",
       image: item.image,
       synced: true,
     }));
   } catch (err) {
-    console.error("❌ Gagal ambil data server:", err);
+    console.error("❌ Gagal ambil server:", err);
     return [];
   }
 };
@@ -122,7 +127,6 @@ export default function DataLocalScreen({ navigation }) {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
 
-  // Ambil kategori
   const fetchCategories = async () => {
     try {
       const db = await getDatabase();
@@ -134,22 +138,20 @@ export default function DataLocalScreen({ navigation }) {
     }
   };
 
-  // Ambil dan merge data
   const fetchData = async () => {
     try {
       const local = await getAllLocalPrices();
       const server = await getSyncedPricesFromServer();
-
-      const merged = mergeServerAndLocal(server, local);
+      const merged = mergeServerAndLocal(server, local || []);
 
       setDataKomoditas(
         merged.map((item) => ({
           id: item.id_price || item.id,
           commodity_id: item.commodity_id,
           nama: item.name_commodity,
-          harga: `Rp ${parseInt(item.price).toLocaleString("id-ID")}`,
-          satuan: item.unit || item.name_unit,
-          tanggal: item.created_at,
+          harga: `Rp ${parseInt(item.price || 0).toLocaleString("id-ID")}`,
+          satuan: item.unit || item.name_unit || "-",
+          tanggal: item.created_at || new Date().toISOString(),
           kategori: item.name_category,
           image: item.image,
           local_image: item.local_image,
@@ -157,11 +159,10 @@ export default function DataLocalScreen({ navigation }) {
         }))
       );
     } catch (err) {
-      console.error("❌ Gagal ambil data:", err);
+      console.error("❌ fetchData:", err);
     }
   };
 
-  // Auto Sync
   const autoSync = async () => {
     const state = await NetInfo.fetch();
     if (state.isConnected) {
@@ -181,7 +182,21 @@ export default function DataLocalScreen({ navigation }) {
     }, [])
   );
 
-  // Format
+  // ========================
+  // 📌 HITUNG RATA-RATA HARGA PER KOMODITAS
+  // ========================
+  const hitungRataRataHarga = (commodity_id) => {
+    const items = dataKomoditas.filter((x) => x.commodity_id === commodity_id);
+    if (!items.length) return 0;
+
+    const total = items.reduce((sum, x) => {
+      const angka = Number((x.harga || "0").replace(/[^0-9]/g, ""));
+      return sum + angka;
+    }, 0);
+
+    return total / items.length;
+  };
+
   const formatTanggalHeader = () =>
     selectedDate.toLocaleDateString("id-ID", {
       day: "numeric",
@@ -192,18 +207,13 @@ export default function DataLocalScreen({ navigation }) {
   const formatTanggalItem = (tgl) => {
     if (!tgl) return "-";
     const d = new Date(tgl);
-    if (isNaN(d)) return "-";
-    return `${d.toLocaleDateString("id-ID", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    })}, ${d.toLocaleTimeString("id-ID", {
+    if (isNaN(d.getTime())) return "-";
+    return `${d.toLocaleDateString("id-ID")}, ${d.toLocaleTimeString("id-ID", {
       hour: "2-digit",
       minute: "2-digit",
     })}`;
   };
 
-  // Pilih data
   const toggleSelectItem = (id) => {
     const updated = selectedItems.includes(id)
       ? selectedItems.filter((x) => x !== id)
@@ -235,35 +245,37 @@ export default function DataLocalScreen({ navigation }) {
             for (const id of selectedItems) {
               const item = dataKomoditas.find((i) => i.id === id);
               if (item) await deleteLocalPrice(id, item);
+
               await pushNotification({
                 type: "warning",
                 title: "Data Dihapus",
-                message: `${item.nama} telah dihapus`,
+                message: `${item?.nama} telah dihapus`,
               });
             }
+
             setDataKomoditas((prev) =>
               prev.filter((i) => !selectedItems.includes(i.id))
             );
             setSelectedItems([]);
             setIsSelectionMode(false);
           } catch (error) {
-            console.error("❌ Gagal hapus data:", error);
+            console.error("❌ Gagal hapus:", error);
           }
         },
       },
     ]);
   };
 
-  // Filter data
   const filteredData = dataKomoditas.filter((item) => {
-    const itemDate = new Date(item.tanggal).toISOString().split("T")[0];
-    const selectedDateString = selectedDate.toISOString().split("T")[0];
-    const matchDate = itemDate === selectedDateString;
-    const matchSearch = item.nama
-      ?.toLowerCase()
-      .includes(search.toLowerCase().trim());
-    const matchCategory =
-      selectedTab === "Semua" || item.kategori === selectedTab;
+    if (!item.tanggal) return false;
+
+    const itemDate = new Date(item.tanggal);
+    const selectedDateStr = selectedDate.toISOString().split("T")[0];
+    const itemDateStr = itemDate.toISOString().split("T")[0];
+
+    const matchDate = itemDateStr === selectedDateStr;
+    const matchSearch = item.nama?.toLowerCase().includes(search.toLowerCase());
+    const matchCategory = selectedTab === "Semua" || item.kategori === selectedTab;
 
     return matchDate && matchSearch && matchCategory;
   });
@@ -279,20 +291,18 @@ export default function DataLocalScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* Date Picker */}
         {showDatePicker && (
           <DateTimePicker
             value={selectedDate}
             mode="date"
             display="calendar"
-            onChange={(e, newDate) => {
+            onChange={(e, d) => {
               setShowDatePicker(false);
-              if (newDate) setSelectedDate(newDate);
+              if (d) setSelectedDate(d);
             }}
           />
         )}
 
-        {/* Menu */}
         <Modal
           transparent
           visible={menuVisible}
@@ -314,6 +324,7 @@ export default function DataLocalScreen({ navigation }) {
                 <Ionicons name="time-outline" size={18} color="#fff" />
                 <Text style={styles.menuText}>Lihat Riwayat</Text>
               </TouchableOpacity>
+
               <TouchableOpacity style={styles.menuItem} onPress={handleSelectAll}>
                 <Ionicons name="checkmark-done-outline" size={18} color="#fff" />
                 <Text style={styles.menuText}>
@@ -326,7 +337,6 @@ export default function DataLocalScreen({ navigation }) {
           </TouchableOpacity>
         </Modal>
 
-        {/* Search */}
         <View style={styles.searchContainer}>
           <Ionicons name="search" size={18} color="#6B7280" />
           <TextInput
@@ -338,7 +348,6 @@ export default function DataLocalScreen({ navigation }) {
           />
         </View>
 
-        {/* Filter Row */}
         <View style={styles.filterRow}>
           <TouchableOpacity
             style={styles.filterBox}
@@ -347,22 +356,19 @@ export default function DataLocalScreen({ navigation }) {
             <Ionicons name="calendar-outline" size={16} color="#174A6A" />
             <Text style={styles.filterText}>{formatTanggalHeader()}</Text>
           </TouchableOpacity>
+
           <View style={styles.filterBox}>
             <Ionicons name="cube-outline" size={16} color="#174A6A" />
             <Text style={styles.filterText}>Total: {filteredData.length}</Text>
           </View>
         </View>
 
-        {/* Tabs */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View style={styles.tabRow}>
             {kategori.map((item, index) => (
               <TouchableOpacity
                 key={index}
-                style={[
-                  styles.tabItem,
-                  selectedTab === item && styles.tabActive,
-                ]}
+                style={[styles.tabItem, selectedTab === item && styles.tabActive]}
                 onPress={() => setSelectedTab(item)}
               >
                 <Text
@@ -384,11 +390,25 @@ export default function DataLocalScreen({ navigation }) {
         {filteredData.length ? (
           filteredData.map((item) => {
             const selected = selectedItems.includes(item.id);
+            const avg = hitungRataRataHarga(item.commodity_id);
+
             return (
               <TouchableOpacity
                 key={item.id}
                 style={styles.card}
-                onPress={() => isSelectionMode && toggleSelectItem(item.id)}
+                disabled={isSelectionMode}
+                onPress={() => {
+                  if (isSelectionMode) {
+                    toggleSelectItem(item.id);
+                  } else {
+                    navigation.navigate("DetailHarga", {
+                      commodity_id: item.commodity_id,
+                      nama_komoditas: item.nama,
+                      kategori: item.kategori,
+                      satuan: item.satuan,
+                    });
+                  }
+                }}
                 onLongPress={() => {
                   setIsSelectionMode(true);
                   toggleSelectItem(item.id);
@@ -411,11 +431,7 @@ export default function DataLocalScreen({ navigation }) {
                       })
                     }
                   >
-                    <Ionicons
-                      name="create-outline"
-                      size={14}
-                      color="#174A6A"
-                    />
+                    <Ionicons name="create-outline" size={14} color="#174A6A" />
                   </TouchableOpacity>
                 )}
 
@@ -441,6 +457,12 @@ export default function DataLocalScreen({ navigation }) {
                   <Text style={styles.itemPrice}>
                     {item.harga} / {item.satuan}
                   </Text>
+
+                  {/* RATA-RATA HARGA */}
+                  <Text style={styles.avgPrice}>
+                    Rata-rata: Rp {Math.round(avg).toLocaleString("id-ID")}
+                  </Text>
+
                   <Text style={styles.itemDate}>
                     {formatTanggalItem(item.tanggal)}
                   </Text>
@@ -453,9 +475,7 @@ export default function DataLocalScreen({ navigation }) {
                       styles.statusText,
                       {
                         color:
-                          item.status === "Tersinkron"
-                            ? "#16A34A"
-                            : "#DC2626",
+                          item.status === "Tersinkron" ? "#16A34A" : "#DC2626",
                       },
                     ]}
                   >
@@ -479,7 +499,6 @@ export default function DataLocalScreen({ navigation }) {
         )}
       </ScrollView>
 
-      {/* Delete Button */}
       {selectedItems.length > 0 && (
         <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
           <Ionicons name="trash-outline" size={18} color="#fff" />
@@ -487,7 +506,6 @@ export default function DataLocalScreen({ navigation }) {
         </TouchableOpacity>
       )}
 
-      {/* Bottom Nav */}
       <View style={styles.bottomNav}>
         <TouchableOpacity
           style={styles.navItem}
@@ -499,9 +517,7 @@ export default function DataLocalScreen({ navigation }) {
 
         <TouchableOpacity style={styles.navItem}>
           <Ionicons name="folder" size={24} color="#174A6A" />
-          <Text style={[styles.navText, styles.navTextActive]}>
-            Data Lokal
-          </Text>
+          <Text style={[styles.navText, styles.navTextActive]}>Data Lokal</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -516,7 +532,9 @@ export default function DataLocalScreen({ navigation }) {
   );
 }
 
-// STYLES
+// ===============================
+// 🎨 STYLES
+// ===============================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },
   header: {
@@ -526,17 +544,9 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
   },
-  headerTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
+  headerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
-  overlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.2)",
-    alignItems: "flex-end",
-  },
+  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.2)", alignItems: "flex-end" },
   menuContainer: {
     backgroundColor: "#174A6A",
     borderRadius: 10,
@@ -554,6 +564,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "rgba(255,255,255,0.2)",
   },
   menuText: { color: "#fff", fontSize: 14, fontWeight: "600" },
+
   searchContainer: {
     flexDirection: "row",
     backgroundColor: "#fff",
@@ -564,11 +575,8 @@ const styles = StyleSheet.create({
     height: 40,
   },
   searchInput: { flex: 1, marginLeft: 6, color: "#111827" },
-  filterRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 12,
-  },
+
+  filterRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 12 },
   filterBox: {
     flexDirection: "row",
     alignItems: "center",
@@ -578,6 +586,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   filterText: { marginLeft: 5, color: "#174A6A", fontWeight: "600" },
+
   tabRow: { flexDirection: "row", marginTop: 10, paddingBottom: 4 },
   tabItem: {
     backgroundColor: "transparent",
@@ -591,7 +600,9 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: "#fff" },
   tabText: { color: "#fff", fontWeight: "500" },
   tabTextActive: { color: "#174A6A", fontWeight: "700" },
+
   listContainer: { padding: 16 },
+
   card: {
     flexDirection: "row",
     backgroundColor: "#fff",
@@ -605,6 +616,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingRight: 16,
   },
+
   editIcon: {
     position: "absolute",
     top: 6,
@@ -614,18 +626,21 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     padding: 3,
   },
+
   leftSection: { flex: 1, justifyContent: "center" },
-  rightSection: {
-    minWidth: 110,
-    alignItems: "flex-end",
-    justifyContent: "center",
-  },
+  rightSection: { minWidth: 110, alignItems: "flex-end", justifyContent: "center" },
+
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "700", marginTop: 2 },
   itemDate: { fontSize: 11, color: "#6B7280", marginTop: 4 },
+
+  avgPrice: { fontSize: 12, color: "#0F172A", fontWeight: "700", marginTop: 3 },
+
   itemCategory: { fontSize: 13, color: "#174A6A", fontWeight: "700" },
   statusText: { fontSize: 12, fontWeight: "700" },
+
   emptyText: { textAlign: "center", marginTop: 40, color: "#6B7280" },
+
   deleteButton: {
     position: "absolute",
     bottom: 90,
@@ -638,6 +653,7 @@ const styles = StyleSheet.create({
     borderRadius: 30,
   },
   deleteText: { color: "#fff", marginLeft: 6, fontWeight: "700" },
+
   bottomNav: {
     flexDirection: "row",
     justifyContent: "space-around",
