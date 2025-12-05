@@ -7,16 +7,17 @@ import {
   Text, 
   StyleSheet, 
   ScrollView, 
-  Image, 
+  Image,
   TouchableOpacity, 
   Alert, 
   Platform 
 } from "react-native";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import { getAllLocalPrices, deleteLocalPrice } from "../../config/database";
-import api from "../../config/api"; // pastikan ada api.js untuk fetch server
+import api from "../../config/api"; // pastikan api.js sudah versi wrapper fetch
 
 const formatTanggal = (tgl) => {
   if (!tgl) return "-";
@@ -50,7 +51,10 @@ export default function DetailHargaScreen() {
     setLoading(true);
     let serverPrices = [];
     try {
-      const res = await api.get(`/prices?commodity_id=${commodity_id}`);
+      // ambil token dari AsyncStorage jika perlu
+      const token = await AsyncStorage.getItem("token");
+
+      const res = await api.get(`/prices?commodity_id=${commodity_id}`, token);
       if (res.ok) {
         serverPrices = await res.json();
       } else {
@@ -62,23 +66,27 @@ export default function DetailHargaScreen() {
 
     try {
       const localPrices = await getAllLocalPrices();
-      const filteredLocal = localPrices.filter(x => x.commodity_id === commodity_id);
+      const filteredLocal = localPrices.filter(x => String(x.commodity_id) === String(commodity_id));
+
       // gabungkan server + lokal (server dulu, lokal bisa overwrite jika id sama)
       const combined = [...serverPrices, ...filteredLocal];
+
       // filter berdasarkan tanggal
       const filteredByDate = combined.filter(x => {
-        const tgl = new Date(x.created_at);
+        const tgl = new Date(x.created_at || x.tanggal);
         return tgl.toDateString() === date.toDateString();
       });
+
       setPrices(filteredByDate);
 
       if (filteredByDate.length) {
-        const total = filteredByDate.reduce((sum, x) => sum + Number(x.price || 0), 0);
+        const total = filteredByDate.reduce((sum, x) => sum + Number(x.price || x.raw_price || 0), 0);
         setAvgPrice(total / filteredByDate.length);
       } else setAvgPrice(0);
     } catch (err) {
       console.error("❌ Gagal ambil data lokal:", err);
     }
+
     setLoading(false);
   };
 
@@ -91,7 +99,7 @@ export default function DetailHargaScreen() {
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x!==id) : [...prev,id]);
   };
   const handleLongPress = (item) => {
-    if (!item.synced) {
+    if(!item.synced){
       if(!selectionMode) setSelectionMode(true);
       toggleSelect(item.id);
     }
@@ -105,8 +113,9 @@ export default function DetailHargaScreen() {
       { text:"Batal", style:"cancel", onPress:()=>{ setSelectedIds([]); setSelectionMode(false); } },
       { text:"Hapus", style:"destructive", onPress: async ()=>{
           for(const id of selectedIds) await deleteLocalPrice(id);
-          setSelectedIds([]); setSelectionMode(false); fetchData();
-        } 
+          setSelectedIds([]); setSelectionMode(false);
+          fetchData();
+        }
       }
     ]);
   };
@@ -199,8 +208,8 @@ export default function DetailHargaScreen() {
             ):null}
 
             <View style={styles.info}>
-              <Text style={styles.price}>Rp {Number(item.price).toLocaleString("id-ID")} / {satuan}</Text>
-              <Text style={styles.date}>Tanggal: {formatTanggal(item.created_at)}</Text>
+              <Text style={styles.price}>Rp {Number(item.price || item.raw_price).toLocaleString("id-ID")} / {satuan}</Text>
+              <Text style={styles.date}>Tanggal: {formatTanggal(item.created_at || item.tanggal)}</Text>
               <Text style={[styles.status,{color:item.synced?"#16A34A":"#DC2626"}]}>{item.synced?"Tersinkron":"Belum Tersinkron"}</Text>
             </View>
 

@@ -1,7 +1,7 @@
 // ===============================
-// 📱 DataLocalScreen.js (FINAL FIX - Harga langsung muncul)
+// 📱 DataLocalScreen.js (FINAL - Hari Ini & Kemarin + Server + Lokal + Gambar)
 // ===============================
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -10,8 +10,6 @@ import {
   StyleSheet,
   Image,
   ScrollView,
-  Modal,
-  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -19,74 +17,68 @@ import { useFocusEffect } from "@react-navigation/native";
 import NetInfo from "@react-native-community/netinfo";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { pushNotification } from "./NotificationScreen";
 
 import {
   getAllLocalPrices,
-  deleteLocalPrice,
-  syncPricesToServer,
   getDatabase,
+  syncPricesToServer,
 } from "../../config/database";
 
 // ========================
-// 🔥 MERGE DATA TANPA DUPLIKASI
+// 🛠 HELPER FUNCTIONS
 // ========================
-const mergeServerAndLocal = (serverRows, localRows) => {
-  const merged = [];
-  const usedLocal = new Set();
-
-  const isCloseTime = (t1, t2) => {
-    try {
-      if (!t1 || !t2) return false;
-      const a = new Date(t1).getTime();
-      const b = new Date(t2).getTime();
-      if (isNaN(a) || isNaN(b)) return false;
-      return Math.abs(a - b) <= 180000; // 3 menit
-    } catch {
-      return false;
-    }
-  };
-
-  for (const s of serverRows) {
-    let matchedLocal = null;
-
-    for (const l of localRows) {
-      if (usedLocal.has(l)) continue;
-
-      if (s.commodity_id && l.commodity_id && s.commodity_id === l.commodity_id) {
-        matchedLocal = l;
-        break;
-      }
-
-      if (
-        (s.name_commodity ?? "").trim().toLowerCase() ===
-          (l.name_commodity ?? "").trim().toLowerCase() &&
-        Number(s.price) === Number(l.price) &&
-        isCloseTime(s.created_at, l.created_at)
-      ) {
-        matchedLocal = l;
-        break;
-      }
-    }
-
-    if (matchedLocal) usedLocal.add(matchedLocal);
-    merged.push(s);
-  }
-
-  for (const l of localRows) {
-    if (!usedLocal.has(l)) merged.push(l);
-  }
-
-  merged.sort((a, b) => {
-    const aTime = new Date(a.created_at).getTime();
-    const bTime = new Date(b.created_at).getTime();
-    return (isNaN(bTime) ? 0 : bTime) - (isNaN(aTime) ? 0 : aTime);
-  });
-
-  return merged;
+const safeParsePrice = (value) => {
+  if (value === null || value === undefined) return 0;
+  const cleaned = value.toString().replace(/[^0-9]/g, "");
+  const parsed = Number(cleaned);
+  return isNaN(parsed) ? 0 : parsed;
 };
 
-// Ambil data server
+const resolveName = (item) =>
+  item.name_commodity ||
+  item.nama ||
+  item.commodity_name ||
+  item.name ||
+  item.commodity?.name ||
+  "-";
+
+const resolveUnit = (item) =>
+  item.name_unit || item.unit || item.satuan || item.commodity?.unit || "-";
+
+// ========================
+// 🔥 FORMAT TANGGAL SERVER
+// ========================
+const formatServerDate = (isoString) => {
+  if (!isoString) return null;
+  const d = new Date(isoString);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+// ========================
+// 🔥 MERGE DATA
+// ========================
+const mergeServerAndLocal = (serverRows, localRows) => {
+  const finalDataMap = new Map();
+  const allRows = [...serverRows, ...localRows];
+
+  for (const item of allRows) {
+    const key = item.id_price || item.id || item.local_id || `local-${Math.random()}`;
+    finalDataMap.set(key, item);
+  }
+
+  return Array.from(finalDataMap.values()).sort((a, b) => {
+    const aTime = new Date(a.created_at || a.tanggal).getTime();
+    const bTime = new Date(b.created_at || b.tanggal).getTime();
+    return (isNaN(bTime) ? 0 : bTime) - (isNaN(aTime) ? 0 : aTime);
+  });
+};
+
+// ========================
+// 🔥 FETCH SERVER
+// ========================
 const getSyncedPricesFromServer = async () => {
   try {
     const token = await AsyncStorage.getItem("token");
@@ -100,14 +92,16 @@ const getSyncedPricesFromServer = async () => {
     const data = Array.isArray(json.data) ? json.data : [];
 
     return data.map((item) => ({
-      id_price: item.id_price,
-      commodity_id: item.id_commodity || item.commodity_id,
-      name_commodity: item.name_commodity,
-      price: item.price,
-      name_unit: item.name_unit || "-",
+      id_price: item.commodity_id,
+      commodity_id: item.commodity_id,
+      name_commodity: item.commodity_name || "-",
+      price: item.average_price !== null ? Number(item.average_price) : 0,
+      name_unit: item.unit_name || "-",
       created_at: item.created_at || new Date().toISOString(),
-      name_category: item.name_category || "Lainnya",
-      image: item.image,
+      name_category: item.category_name || "Lainnya",
+      image: item.image_url
+        ? `http://103.100.27.57:5100/${item.image_url}`
+        : null,
       synced: true,
     }));
   } catch (err) {
@@ -116,12 +110,12 @@ const getSyncedPricesFromServer = async () => {
   }
 };
 
+// ========================
+// 🔥 MAIN COMPONENT
+// ========================
 export default function DataLocalScreen({ navigation }) {
   const [search, setSearch] = useState("");
   const [selectedTab, setSelectedTab] = useState("Semua");
-  const [menuVisible, setMenuVisible] = useState(false);
-  const [selectedItems, setSelectedItems] = useState([]);
-  const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [dataKomoditas, setDataKomoditas] = useState([]);
   const [kategori, setKategori] = useState(["Semua"]);
   const [selectedDate, setSelectedDate] = useState(new Date());
@@ -138,26 +132,40 @@ export default function DataLocalScreen({ navigation }) {
     }
   };
 
+  const processDataForDisplay = (listData, isOnline) => {
+    return listData
+      .map((item) => {
+        const priceNum = safeParsePrice(item.price || item.harga);
+        const name = resolveName(item);
+        if (name === "-") return null;
+
+        return {
+          id:
+            item.id_price || item.id || item.local_id || `${item.commodity_id}-${Math.random()}`,
+          commodity_id: item.commodity_id,
+          nama: name,
+          raw_price: priceNum,
+          harga: priceNum > 0 ? `Rp ${priceNum.toLocaleString("id-ID")}` : "-",
+          satuan: resolveUnit(item),
+          tanggal: item.created_at || item.tanggal || new Date().toISOString(),
+          kategori: item.name_category || item.category || item.kategori || "Lainnya",
+          image: item.image || null,
+          local_image: item.local_image || null,
+          status: isOnline || item.synced ? "Tersinkron" : "Belum Tersinkron",
+        };
+      })
+      .filter(Boolean);
+  };
+
   const fetchData = async () => {
     try {
-      const local = await getAllLocalPrices();
-      const server = await getSyncedPricesFromServer();
-      const merged = mergeServerAndLocal(server, local || []);
+      const state = await NetInfo.fetch();
+      const isOnline = !!state.isConnected;
 
-      setDataKomoditas(
-        merged.map((item) => ({
-          id: item.id_price || item.id,
-          commodity_id: item.commodity_id,
-          nama: item.name_commodity,
-          harga: `Rp ${parseInt(item.price || 0).toLocaleString("id-ID")}`,
-          satuan: item.unit || item.name_unit || "-",
-          tanggal: item.created_at || new Date().toISOString(),
-          kategori: item.name_category,
-          image: item.image,
-          local_image: item.local_image,
-          status: item.synced ? "Tersinkron" : "Belum Tersinkron",
-        }))
-      );
+      const local = (await getAllLocalPrices()) || [];
+      const server = isOnline ? await getSyncedPricesFromServer() : [];
+      const merged = mergeServerAndLocal(server, local);
+      setDataKomoditas(processDataForDisplay(merged, isOnline));
     } catch (err) {
       console.error("❌ fetchData:", err);
     }
@@ -183,159 +191,104 @@ export default function DataLocalScreen({ navigation }) {
   );
 
   // ========================
-  // 📌 HITUNG RATA-RATA HARGA PER KOMODITAS
+  // 🔥 HITUNG RATA-RATA KEMARIN
   // ========================
-  const hitungRataRataHarga = (commodity_id) => {
-    const items = dataKomoditas.filter((x) => x.commodity_id === commodity_id);
-    if (!items.length) return 0;
+  const hitungRataRataKemarin = (commodityId) => {
+    const yesterday = new Date(selectedDate.getTime() - 24 * 60 * 60 * 1000);
+    const yesterdayStr = formatServerDate(yesterday.toISOString());
 
-    const total = items.reduce((sum, x) => {
-      const angka = Number((x.harga || "0").replace(/[^0-9]/g, ""));
-      return sum + angka;
-    }, 0);
-
-    return total / items.length;
+    const yesterdayItems = dataKomoditas.filter(
+      (item) =>
+        String(item.commodity_id) === String(commodityId) &&
+        formatServerDate(item.tanggal) === yesterdayStr
+    );
+    if (!yesterdayItems.length) return 0;
+    const total = yesterdayItems.reduce((sum, item) => sum + item.raw_price, 0);
+    return Math.round(total / yesterdayItems.length);
   };
 
-  const formatTanggalHeader = () =>
-    selectedDate.toLocaleDateString("id-ID", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
+  // ========================
+  // 🔥 GROUP DATA HARI INI
+  // ========================
+  const groupedCommodities = useMemo(() => {
+    const selectedDateStr = formatServerDate(selectedDate.toISOString());
+
+    const filtered = dataKomoditas.filter((item) => {
+      const itemDateStr = formatServerDate(item.tanggal);
+      const matchDate = itemDateStr === selectedDateStr;
+      const matchSearch = item.nama?.toLowerCase().includes(search.toLowerCase());
+      const matchCategory = selectedTab === "Semua" || item.kategori === selectedTab;
+      return matchDate && matchSearch && matchCategory;
     });
+
+    const map = new Map();
+    for (const item of filtered) {
+      const id = item.commodity_id;
+      if (!map.has(id)) {
+        map.set(id, { totalPrice: 0, count: 0, latestItem: item });
+      }
+      const current = map.get(id);
+      current.totalPrice += item.raw_price;
+      current.count += 1;
+      if (new Date(item.tanggal) > new Date(current.latestItem.tanggal)) {
+        current.latestItem = item;
+      }
+    }
+
+    return Array.from(map.values()).map((group) => {
+      const avg = group.count ? Math.round(group.totalPrice / group.count) : 0;
+      return {
+        id: group.latestItem.commodity_id,
+        commodity_id: group.latestItem.commodity_id,
+        nama: group.latestItem.nama,
+        harga: avg > 0 ? `Rp ${avg.toLocaleString("id-ID")}` : "-",
+        raw_price: avg,
+        satuan: group.latestItem.satuan,
+        tanggal: group.latestItem.tanggal,
+        kategori: group.latestItem.kategori,
+        image: group.latestItem.image,
+        local_image: group.latestItem.local_image,
+        status: group.latestItem.status,
+        entry_count: group.count,
+      };
+    });
+  }, [dataKomoditas, search, selectedTab, selectedDate]);
+
+  // ========================
+  // 🔥 FORMAT TANGGAL
+  // ========================
+  const formatTanggalHeader = () =>
+    selectedDate.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
 
   const formatTanggalItem = (tgl) => {
     if (!tgl) return "-";
     const d = new Date(tgl);
     if (isNaN(d.getTime())) return "-";
-    return `${d.toLocaleDateString("id-ID")}, ${d.toLocaleTimeString("id-ID", {
-      hour: "2-digit",
-      minute: "2-digit",
-    })}`;
+    return `${d.getUTCDate()} ${d.toLocaleString("id-ID", { month: "short" })} ${d.getUTCFullYear()}, ${d.getUTCHours().toString().padStart(2, "0")}.${d.getUTCMinutes().toString().padStart(2, "0")}`;
   };
 
-  const toggleSelectItem = (id) => {
-    const updated = selectedItems.includes(id)
-      ? selectedItems.filter((x) => x !== id)
-      : [...selectedItems, id];
-    setSelectedItems(updated);
-    setIsSelectionMode(updated.length > 0);
+  const handleDateChange = (event, date) => {
+    setShowDatePicker(false);
+    if (date) setSelectedDate(date);
   };
 
-  const handleSelectAll = () => {
-    if (selectedItems.length === dataKomoditas.length) {
-      setSelectedItems([]);
-      setIsSelectionMode(false);
-    } else {
-      setSelectedItems(dataKomoditas.map((i) => i.id));
-      setIsSelectionMode(true);
-    }
-    setMenuVisible(false);
-  };
-
-  const handleDelete = () => {
-    if (selectedItems.length === 0) return;
-    Alert.alert("Konfirmasi", "Hapus data terpilih?", [
-      { text: "Batal", style: "cancel" },
-      {
-        text: "Hapus",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            for (const id of selectedItems) {
-              const item = dataKomoditas.find((i) => i.id === id);
-              if (item) await deleteLocalPrice(id, item);
-
-              await pushNotification({
-                type: "warning",
-                title: "Data Dihapus",
-                message: `${item?.nama} telah dihapus`,
-              });
-            }
-
-            setDataKomoditas((prev) =>
-              prev.filter((i) => !selectedItems.includes(i.id))
-            );
-            setSelectedItems([]);
-            setIsSelectionMode(false);
-          } catch (error) {
-            console.error("❌ Gagal hapus:", error);
-          }
-        },
-      },
-    ]);
-  };
-
-  const filteredData = dataKomoditas.filter((item) => {
-    if (!item.tanggal) return false;
-
-    const itemDate = new Date(item.tanggal);
-    const selectedDateStr = selectedDate.toISOString().split("T")[0];
-    const itemDateStr = itemDate.toISOString().split("T")[0];
-
-    const matchDate = itemDateStr === selectedDateStr;
-    const matchSearch = item.nama?.toLowerCase().includes(search.toLowerCase());
-    const matchCategory = selectedTab === "Semua" || item.kategori === selectedTab;
-
-    return matchDate && matchSearch && matchCategory;
-  });
-
+  // ========================
+  // 🔥 RENDER
+  // ========================
   return (
     <View style={styles.container}>
       {/* HEADER */}
       <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
         <View style={styles.headerTop}>
-          <Text style={styles.headerTitle}>Data Komoditas Lokal</Text>
-          <TouchableOpacity onPress={() => setMenuVisible(true)}>
-            <Ionicons name="ellipsis-vertical" size={20} color="#fff" />
+          <Text style={styles.headerTitle}>Rata-Rata Harga Komoditas</Text>
+          <TouchableOpacity onPress={() => navigation.navigate("Riwayat")} style={{ padding: 6 }}>
+            <Ionicons name="time-outline" size={24} color="#fff" />
           </TouchableOpacity>
         </View>
 
         {showDatePicker && (
-          <DateTimePicker
-            value={selectedDate}
-            mode="date"
-            display="calendar"
-            onChange={(e, d) => {
-              setShowDatePicker(false);
-              if (d) setSelectedDate(d);
-            }}
-          />
+          <DateTimePicker value={selectedDate} mode="date" display="calendar" onChange={handleDateChange} />
         )}
-
-        <Modal
-          transparent
-          visible={menuVisible}
-          animationType="fade"
-          onRequestClose={() => setMenuVisible(false)}
-        >
-          <TouchableOpacity
-            style={styles.overlay}
-            onPressOut={() => setMenuVisible(false)}
-          >
-            <View style={styles.menuContainer}>
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => {
-                  setMenuVisible(false);
-                  navigation.navigate("Riwayat");
-                }}
-              >
-                <Ionicons name="time-outline" size={18} color="#fff" />
-                <Text style={styles.menuText}>Lihat Riwayat</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.menuItem} onPress={handleSelectAll}>
-                <Ionicons name="checkmark-done-outline" size={18} color="#fff" />
-                <Text style={styles.menuText}>
-                  {selectedItems.length === dataKomoditas.length
-                    ? "Batal Pilih Semua"
-                    : "Pilih Semua"}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        </Modal>
 
         <View style={styles.searchContainer}>
           <Ionicons name="search" size={18} color="#6B7280" />
@@ -349,17 +302,14 @@ export default function DataLocalScreen({ navigation }) {
         </View>
 
         <View style={styles.filterRow}>
-          <TouchableOpacity
-            style={styles.filterBox}
-            onPress={() => setShowDatePicker(true)}
-          >
+          <TouchableOpacity style={styles.filterBox} onPress={() => setShowDatePicker(true)}>
             <Ionicons name="calendar-outline" size={16} color="#174A6A" />
             <Text style={styles.filterText}>{formatTanggalHeader()}</Text>
           </TouchableOpacity>
 
           <View style={styles.filterBox}>
             <Ionicons name="cube-outline" size={16} color="#174A6A" />
-            <Text style={styles.filterText}>Total: {filteredData.length}</Text>
+            <Text style={styles.filterText}>Total: {groupedCommodities.length} Komoditas</Text>
           </View>
         </View>
 
@@ -371,14 +321,7 @@ export default function DataLocalScreen({ navigation }) {
                 style={[styles.tabItem, selectedTab === item && styles.tabActive]}
                 onPress={() => setSelectedTab(item)}
               >
-                <Text
-                  style={[
-                    styles.tabText,
-                    selectedTab === item && styles.tabTextActive,
-                  ]}
-                >
-                  {item}
-                </Text>
+                <Text style={[styles.tabText, selectedTab === item && styles.tabTextActive]}>{item}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -387,143 +330,71 @@ export default function DataLocalScreen({ navigation }) {
 
       {/* LIST */}
       <ScrollView style={styles.listContainer}>
-        {filteredData.length ? (
-          filteredData.map((item) => {
-            const selected = selectedItems.includes(item.id);
-            const avg = hitungRataRataHarga(item.commodity_id);
+        {groupedCommodities.length ? (
+          groupedCommodities.map((item) => (
+            <TouchableOpacity
+              key={item.id}
+              style={styles.card}
+              onPress={() => {
+                const yesterdayAvg = hitungRataRataKemarin(item.commodity_id);
+                navigation.navigate("DetailHarga", {
+                  commodity_id: item.commodity_id,
+                  nama_komoditas: item.nama,
+                  kategori: item.kategori,
+                  satuan: item.satuan,
+                  initialPrice: item.raw_price,
+                  yesterdayPrice: yesterdayAvg,
+                });
+              }}
+            >
+              <Image
+                source={
+                  item.image
+                    ? { uri: item.image }
+                    : item.local_image
+                    ? { uri: item.local_image }
+                    : null
+                }
+                style={{ width: 64, height: 64, borderRadius: 10, marginEnd: 8, backgroundColor: "#EEE" }}
+              />
 
-            return (
-              <TouchableOpacity
-                key={item.id}
-                style={styles.card}
-                disabled={isSelectionMode}
-                onPress={() => {
-                  if (isSelectionMode) {
-                    toggleSelectItem(item.id);
-                  } else {
-                    navigation.navigate("DetailHarga", {
-                      commodity_id: item.commodity_id,
-                      nama_komoditas: item.nama,
-                      kategori: item.kategori,
-                      satuan: item.satuan,
-                    });
-                  }
-                }}
-                onLongPress={() => {
-                  setIsSelectionMode(true);
-                  toggleSelectItem(item.id);
-                }}
-              >
-                {!isSelectionMode && (
-                  <TouchableOpacity
-                    style={styles.editIcon}
-                    onPress={() =>
-                      navigation.navigate("EditData", {
-                        item,
-                        onEditSuccess: async () => {
-                          await pushNotification({
-                            type: "success",
-                            title: "Data Diperbarui",
-                            message: `${item.nama} berhasil diperbarui`,
-                          });
-                          await fetchData();
-                        },
-                      })
-                    }
-                  >
-                    <Ionicons name="create-outline" size={14} color="#174A6A" />
-                  </TouchableOpacity>
-                )}
+              <View style={styles.leftSection}>
+                <Text style={styles.itemName}>{item.nama}</Text>
+                <Text style={styles.itemPrice}>{item.harga} / {item.satuan}</Text>
+                <Text style={styles.avgPrice}>Diinput {item.entry_count} kali (Hari Ini)</Text>
+                <Text style={styles.itemDate}>Update Terakhir: {formatTanggalItem(item.tanggal)}</Text>
+              </View>
 
-                <Image
-                  source={
-                    item.image
-                      ? { uri: item.image }
-                      : item.local_image
-                      ? { uri: item.local_image }
-                      : null
-                  }
-                  style={{
-                    width: 64,
-                    height: 64,
-                    borderRadius: 10,
-                    marginEnd: 8,
-                    backgroundColor: "#EEE",
-                  }}
-                />
-
-                <View style={styles.leftSection}>
-                  <Text style={styles.itemName}>{item.nama}</Text>
-                  <Text style={styles.itemPrice}>
-                    {item.harga} / {item.satuan}
-                  </Text>
-
-                  {/* RATA-RATA HARGA */}
-                  <Text style={styles.avgPrice}>
-                    Rata-rata: Rp {Math.round(avg).toLocaleString("id-ID")}
-                  </Text>
-
-                  <Text style={styles.itemDate}>
-                    {formatTanggalItem(item.tanggal)}
-                  </Text>
-                </View>
-
-                <View style={styles.rightSection}>
-                  <Text style={styles.itemCategory}>{item.kategori}</Text>
-                  <Text
-                    style={[
-                      styles.statusText,
-                      {
-                        color:
-                          item.status === "Tersinkron" ? "#16A34A" : "#DC2626",
-                      },
-                    ]}
-                  >
-                    {item.status}
-                  </Text>
-                </View>
-
-                {selected && (
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={22}
-                    color="#16A34A"
-                    style={{ marginLeft: 8 }}
-                  />
-                )}
-              </TouchableOpacity>
-            );
-          })
+              <View style={styles.rightSection}>
+                <Text style={styles.itemCategory}>{item.kategori}</Text>
+                <Text style={[styles.statusText, { color: item.status === "Tersinkron" ? "#16A34A" : "#DC2626" }]}>
+                  {item.status}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ))
         ) : (
-          <Text style={styles.emptyText}>Tidak ada data ditemukan</Text>
+          <View style={{ alignItems: "center", marginTop: 50 }}>
+            <Ionicons name="file-tray-outline" size={48} color="#CBD5E1" />
+            <Text style={styles.emptyText}>Tidak ada data di tanggal ini.</Text>
+            <Text style={{ color: "#94A3B8", fontSize: 12, marginTop: 4 }}>Coba ubah tanggal atau masukkan data baru.</Text>
+          </View>
         )}
       </ScrollView>
 
-      {selectedItems.length > 0 && (
-        <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
-          <Ionicons name="trash-outline" size={18} color="#fff" />
-          <Text style={styles.deleteText}>Hapus</Text>
-        </TouchableOpacity>
-      )}
-
+      {/* BOTTOM NAV */}
       <View style={styles.bottomNav}>
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => navigation.navigate("Dashboard")}
-        >
+        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate("Dashboard")}>
           <Ionicons name="home-outline" size={24} color="#6B7280" />
           <Text style={styles.navText}>Beranda</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.navItem}>
           <Ionicons name="folder" size={24} color="#174A6A" />
-          <Text style={[styles.navText, styles.navTextActive]}>Data Lokal</Text>
+          <Text style={[styles.navText, styles.navTextActive]}>Rata-rata</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => navigation.navigate("Profile")}
-        >
+        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate("Profile")}>
           <Ionicons name="person-outline" size={24} color="#6B7280" />
           <Text style={styles.navText}>Profil</Text>
         </TouchableOpacity>
@@ -537,131 +408,37 @@ export default function DataLocalScreen({ navigation }) {
 // ===============================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },
-  header: {
-    paddingTop: 50,
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
-  },
+  header: { paddingTop: 50, paddingHorizontal: 16, paddingBottom: 16, borderBottomLeftRadius: 20, borderBottomRightRadius: 20 },
   headerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
-  overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.2)", alignItems: "flex-end" },
-  menuContainer: {
-    backgroundColor: "#174A6A",
-    borderRadius: 10,
-    marginTop: 70,
-    marginRight: 15,
-    paddingVertical: 6,
-    width: 170,
-  },
-  menuItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.2)",
-  },
-  menuText: { color: "#fff", fontSize: 14, fontWeight: "600" },
 
-  searchContainer: {
-    flexDirection: "row",
-    backgroundColor: "#fff",
-    alignItems: "center",
-    borderRadius: 10,
-    marginTop: 10,
-    paddingHorizontal: 10,
-    height: 40,
-  },
+  searchContainer: { flexDirection: "row", backgroundColor: "#fff", alignItems: "center", borderRadius: 10, marginTop: 10, paddingHorizontal: 10, height: 40 },
   searchInput: { flex: 1, marginLeft: 6, color: "#111827" },
 
   filterRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 12 },
-  filterBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#E0F2FE",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
+  filterBox: { flexDirection: "row", alignItems: "center", backgroundColor: "#E0F2FE", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
   filterText: { marginLeft: 5, color: "#174A6A", fontWeight: "600" },
 
   tabRow: { flexDirection: "row", marginTop: 10, paddingBottom: 4 },
-  tabItem: {
-    backgroundColor: "transparent",
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    marginRight: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#fff",
-  },
+  tabItem: { backgroundColor: "transparent", paddingVertical: 6, paddingHorizontal: 12, marginRight: 8, borderRadius: 20, borderWidth: 1, borderColor: "#fff" },
   tabActive: { backgroundColor: "#fff" },
   tabText: { color: "#fff", fontWeight: "500" },
   tabTextActive: { color: "#174A6A", fontWeight: "700" },
 
   listContainer: { padding: 16 },
-
-  card: {
-    flexDirection: "row",
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 10,
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    alignItems: "center",
-    paddingRight: 16,
-  },
-
-  editIcon: {
-    position: "absolute",
-    top: 6,
-    right: 6,
-    zIndex: 10,
-    backgroundColor: "#E0F2FE",
-    borderRadius: 6,
-    padding: 3,
-  },
-
+  card: { flexDirection: "row", backgroundColor: "#fff", borderRadius: 12, padding: 12, marginBottom: 10, elevation: 2, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 3, alignItems: "center", paddingRight: 16 },
   leftSection: { flex: 1, justifyContent: "center" },
   rightSection: { minWidth: 110, alignItems: "flex-end", justifyContent: "center" },
 
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "700", marginTop: 2 },
   itemDate: { fontSize: 11, color: "#6B7280", marginTop: 4 },
-
-  avgPrice: { fontSize: 12, color: "#0F172A", fontWeight: "700", marginTop: 3 },
-
+  avgPrice: { fontSize: 12, color: "#0F172A", fontWeight: "700", marginTop: 3 }, 
   itemCategory: { fontSize: 13, color: "#174A6A", fontWeight: "700" },
   statusText: { fontSize: 12, fontWeight: "700" },
+  emptyText: { textAlign: "center", marginTop: 10, color: "#64748B", fontSize: 16, fontWeight: "600" },
 
-  emptyText: { textAlign: "center", marginTop: 40, color: "#6B7280" },
-
-  deleteButton: {
-    position: "absolute",
-    bottom: 90,
-    right: 20,
-    backgroundColor: "#DC2626",
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    borderRadius: 30,
-  },
-  deleteText: { color: "#fff", marginLeft: 6, fontWeight: "700" },
-
-  bottomNav: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    backgroundColor: "#fff",
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: "#E5E7EB",
-  },
+  bottomNav: { flexDirection: "row", justifyContent: "space-around", backgroundColor: "#fff", paddingVertical: 10, borderTopWidth: 1, borderTopColor: "#E5E7EB" },
   navItem: { alignItems: "center" },
   navText: { color: "#6B7280", fontSize: 12 },
   navTextActive: { color: "#174A6A", fontWeight: "700" },

@@ -1,11 +1,5 @@
 // ====================================
 // 📦 database.js (FULL — Laravel sync-compatible)
-// Adapted for your config/api.js (BASE_URL, ADD_PRICE, SYNC_PRICES, etc.)
-// Changes:
-//  - local_prices stores user_id, market_id, date
-//  - batch payload sent as { prices: [...] }
-//  - single payload includes user_id, market_id, date
-//  - get user_id & market_id from AsyncStorage
 // ====================================
 
 import * as SQLite from "expo-sqlite";

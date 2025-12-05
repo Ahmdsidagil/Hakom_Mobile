@@ -1,5 +1,5 @@
 // ===============================
-// 📱 InputScreen.js (FINAL + Optimistic Update)
+// 📱 InputScreen.js (FINAL + Optimistic Update + Unit Safe Fix)
 // ===============================
 import React, { useEffect, useState, useRef } from "react";
 import {
@@ -23,6 +23,7 @@ import {
   getCategories,
   getCommoditiesByCategory,
   addPrice,
+  getDatabase, // ditambahkan untuk ambil unit secara aman
 } from "../../config/database";
 
 // 🔥 LOCAL IMAGES UNTUK KATEGORI (sesuaikan backend)
@@ -68,6 +69,7 @@ export default function InputScreen({ navigation, route }) {
         }
       }
       setCommodities(all);
+      // console.log("Loaded commodities:", all);
     } catch (err) {
       console.log("Load error:", err);
     }
@@ -120,11 +122,29 @@ export default function InputScreen({ navigation, route }) {
   };
 
   // ===============================
-  // PILIH KOMODITAS
+  // PILIH KOMODITAS + AMBIL UNIT SECARA AMAN
   // ===============================
-  const handleSelectCommodity = (item) => {
+  const handleSelectCommodity = async (item) => {
     setSelectedCommodity(item);
-    setUnit(item.name_unit || "");
+
+    // Ambil unit dari item.unit / item.name_unit / fallback dari DB join units
+    if (item.unit || item.name_unit) {
+      setUnit(item.unit || item.name_unit);
+    } else if (item.unit_id) {
+      try {
+        const db = await getDatabase();
+        const unitRow = await db.getFirstAsync(
+          `SELECT name_unit FROM units WHERE id = ?`,
+          [item.unit_id]
+        );
+        setUnit(unitRow?.name_unit || "");
+      } catch (e) {
+        console.warn("⚠ fetch unit failed:", e);
+        setUnit("");
+      }
+    } else {
+      setUnit("");
+    }
   };
 
   // ===============================
@@ -211,7 +231,7 @@ export default function InputScreen({ navigation, route }) {
           commodity_id: selectedCommodity.id_commodity,
           name_commodity: selectedCommodity.name || selectedCommodity.name_commodity,
           price: priceNum,
-          name_unit: selectedCommodity.name_unit || "-",
+          name_unit: unit || "-", // gunakan unit state yang sudah aman
           created_at: new Date().toISOString(),
           name_category: selectedCommodity.category_name || "-",
           image: selectedCommodity.image || null,
