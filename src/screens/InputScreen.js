@@ -1,5 +1,5 @@
 // ===============================
-// 📱 InputScreen.js (FINAL + Optimistic Update + Unit Safe Fix)
+// 📱 InputScreen.js (FINAL + Optimistic Update + Unit Safe Fix + Image Server Fix)
 // ===============================
 import React, { useEffect, useState, useRef } from "react";
 import {
@@ -23,15 +23,8 @@ import {
   getCategories,
   getCommoditiesByCategory,
   addPrice,
-  getDatabase, // ditambahkan untuk ambil unit secara aman
+  getDatabase,
 } from "../../config/database";
-
-// 🔥 LOCAL IMAGES UNTUK KATEGORI (sesuaikan backend)
-const categoryImages = {
-  Sayurann: require("../assets/sayuran.jpg"),
-  Beras: require("../assets/beras.jpg"),
-  Bumbu: require("../assets/bumbu.jpg"),
-};
 
 export default function InputScreen({ navigation, route }) {
   const [categories, setCategories] = useState([]);
@@ -50,7 +43,7 @@ export default function InputScreen({ navigation, route }) {
   const scrollRef = useRef();
 
   // ===============================
-  // LOAD KATEGORI + KOMODITAS
+  // LOAD DATA
   // ===============================
   useEffect(() => {
     loadData();
@@ -69,7 +62,6 @@ export default function InputScreen({ navigation, route }) {
         }
       }
       setCommodities(all);
-      // console.log("Loaded commodities:", all);
     } catch (err) {
       console.log("Load error:", err);
     }
@@ -96,7 +88,7 @@ export default function InputScreen({ navigation, route }) {
   };
 
   // ===============================
-  // TOGGLE KATEGORI
+  // TOGGLE CATEGORY
   // ===============================
   const toggleCategory = (cat) => {
     const exists = selectedCategories.some(
@@ -122,12 +114,11 @@ export default function InputScreen({ navigation, route }) {
   };
 
   // ===============================
-  // PILIH KOMODITAS + AMBIL UNIT SECARA AMAN
+  // SELECT COMMODITY + UNIT
   // ===============================
   const handleSelectCommodity = async (item) => {
     setSelectedCommodity(item);
 
-    // Ambil unit dari item.unit / item.name_unit / fallback dari DB join units
     if (item.unit || item.name_unit) {
       setUnit(item.unit || item.name_unit);
     } else if (item.unit_id) {
@@ -148,7 +139,7 @@ export default function InputScreen({ navigation, route }) {
   };
 
   // ===============================
-  // FORMAT RP
+  // FORMAT RUPIAH
   // ===============================
   const formatRupiah = (value) => {
     if (!value) return "";
@@ -173,7 +164,7 @@ export default function InputScreen({ navigation, route }) {
   };
 
   // ===============================
-  // SIMPAN HARGA (NO DUPLIKAT + OPTIMISTIC UPDATE)
+  // SUBMIT
   // ===============================
   const handleSubmit = async () => {
     if (selectedCategories.length === 0 || !selectedCommodity || !price) {
@@ -202,7 +193,6 @@ export default function InputScreen({ navigation, route }) {
         return;
       }
 
-      // ============== SAVE KE DB ==============
       const newPriceId = await addPrice(
         selectedCommodity.id_commodity,
         selectedCommodity.category_id,
@@ -219,19 +209,19 @@ export default function InputScreen({ navigation, route }) {
       await pushNotification({
         type: "success",
         title: "Pendataan Berhasil",
-        message: `${selectedCommodity.name || selectedCommodity.name_commodity} telah ditambahkan`,
+        message: `${
+          selectedCommodity.name || selectedCommodity.name_commodity
+        } telah ditambahkan`,
       });
 
-      // ============================
-      // 🔥 OPTIMISTIC UPDATE KE DataLocalScreen
-      // ============================
       if (route?.params?.onAddPrice) {
         route.params.onAddPrice({
           id_price: newPriceId,
           commodity_id: selectedCommodity.id_commodity,
-          name_commodity: selectedCommodity.name || selectedCommodity.name_commodity,
+          name_commodity:
+            selectedCommodity.name || selectedCommodity.name_commodity,
           price: priceNum,
-          name_unit: unit || "-", // gunakan unit state yang sudah aman
+          name_unit: unit || "-",
           created_at: new Date().toISOString(),
           name_category: selectedCommodity.category_name || "-",
           image: selectedCommodity.image || null,
@@ -239,10 +229,7 @@ export default function InputScreen({ navigation, route }) {
         });
       }
 
-      // Bersihkan input
       setPrice("");
-
-      // Kembali ke screen sebelumnya
       navigation.goBack();
     } catch (err) {
       console.error(err);
@@ -258,7 +245,7 @@ export default function InputScreen({ navigation, route }) {
   };
 
   // ===============================
-  // FILTER KOMODITAS SESUAI KATEGORI
+  // FILTER
   // ===============================
   const filteredCommodities = commodities.filter((c) =>
     selectedCategories.some((cat) => cat.id_category === c.category_id)
@@ -271,7 +258,10 @@ export default function InputScreen({ navigation, route }) {
     >
       {/* HEADER */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 6 }}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={{ padding: 6 }}
+        >
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Tambah Data Harga</Text>
@@ -279,22 +269,51 @@ export default function InputScreen({ navigation, route }) {
       </View>
 
       <ScrollView ref={scrollRef} contentContainerStyle={styles.page}>
-        {/* ================= CATEGORY ================= */}
+        {/* ============ KATEGORI ============ */}
         <Text style={styles.title}>Pilih Kategori</Text>
         <View style={styles.grid}>
           {categories.map((cat) => {
             const selected = selectedCategories.some(
               (c) => c.id_category === cat.id_category
             );
-            const img = categoryImages[cat.name_category];
+
+            // ✅ AMBIL IMAGE SERVER – SAMA DENGAN KOMODITAS
+            const imgSource =
+              cat.local_image
+                ? { uri: cat.local_image }
+                : cat.image
+                ? { uri: cat.image }
+                : cat.photo
+                ? { uri: cat.photo }
+                : cat.img_url
+                ? { uri: cat.img_url }
+                : cat.image_path
+                ? { uri: cat.image_path }
+                : null;
+
             return (
               <TouchableOpacity
                 key={cat.id_category}
-                style={[styles.gridBoxSmall, selected && styles.activeGridBox]}
+                style={[
+                  styles.gridBoxSmall,
+                  selected && styles.activeGridBox,
+                ]}
                 onPress={() => toggleCategory(cat)}
               >
-                {img && <Image source={img} style={{ width: 45, height: 45, borderRadius: 8 }} />}
-                <Text style={[styles.boxLabel, { color: selected ? "#fff" : "#174A6A" }]} numberOfLines={2}>
+                {imgSource && (
+                  <Image
+                    source={imgSource}
+                    style={{ width: 45, height: 45, borderRadius: 8 }}
+                    resizeMode="cover"
+                  />
+                )}
+                <Text
+                  style={[
+                    styles.boxLabel,
+                    { color: selected ? "#fff" : "#174A6A" },
+                  ]}
+                  numberOfLines={2}
+                >
                   {cat.name_category}
                 </Text>
               </TouchableOpacity>
@@ -302,35 +321,60 @@ export default function InputScreen({ navigation, route }) {
           })}
         </View>
 
-        {/* ================= KOMODITAS ================= */}
+        {/* ============ KOMODITAS ============ */}
         {selectedCategories.length > 0 && (
           <>
-            <Text style={[styles.title, { marginTop: 15 }]}>Pilih Komoditas</Text>
+            <Text style={[styles.title, { marginTop: 15 }]}>
+              Pilih Komoditas
+            </Text>
             <View style={styles.grid}>
               {filteredCommodities.map((item) => {
-                const active = selectedCommodity?.id_commodity === item.id_commodity;
+                const active =
+                  selectedCommodity?.id_commodity === item.id_commodity;
+
+                const imgSource =
+                  item.local_image
+                    ? { uri: item.local_image }
+                    : item.image
+                    ? { uri: item.image }
+                    : item.photo
+                    ? { uri: item.photo }
+                    : item.img_url
+                    ? { uri: item.img_url }
+                    : item.image_path
+                    ? { uri: item.image_path }
+                    : null;
+
                 return (
                   <TouchableOpacity
                     key={item.id_commodity}
-                    style={[styles.gridBoxSmall, active && styles.activeGridBox]}
+                    style={[
+                      styles.gridBoxSmall,
+                      active && styles.activeGridBox,
+                    ]}
                     onPress={() => handleSelectCommodity(item)}
                   >
                     <Image
-                      source={
-                        item.local_image
-                          ? { uri: item.local_image }
-                          : item.image
-                          ? { uri: item.image }
-                          : null
-                      }
-                      style={{ width: 62, height: 56, borderRadius: 10, marginTop: 6 }}
+                      source={imgSource}
+                      style={{
+                        width: 62,
+                        height: 56,
+                        borderRadius: 10,
+                        marginTop: 6,
+                      }}
                       resizeMode="cover"
                     />
                     <Text
-                      style={[styles.boxLabel, { color: active ? "#fff" : "#174A6A", fontSize: 10 }]}
+                      style={[
+                        styles.boxLabel,
+                        {
+                          color: active ? "#fff" : "#174A6A",
+                          fontSize: 10,
+                        },
+                      ]}
                       numberOfLines={2}
                     >
-                      {item.name}
+                      {item.name || item.name_commodity}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -339,7 +383,7 @@ export default function InputScreen({ navigation, route }) {
           </>
         )}
 
-        {/* ================= INPUT HARGA ================= */}
+        {/* ============ INPUT HARGA ============ */}
         {selectedCommodity && (
           <View style={{ marginTop: 25 }}>
             <Text style={styles.title}>Harga & Satuan</Text>
@@ -373,7 +417,9 @@ export default function InputScreen({ navigation, route }) {
               onPress={handleSubmit}
               disabled={loading}
             >
-              <Text style={styles.buttonText}>{loading ? "Menyimpan..." : "Simpan"}</Text>
+              <Text style={styles.buttonText}>
+                {loading ? "Menyimpan..." : "Simpan"}
+              </Text>
             </TouchableOpacity>
           </View>
         )}
@@ -421,10 +467,24 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
-  headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700", marginLeft: 10 },
+  headerTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+    marginLeft: 10,
+  },
   page: { padding: 20, paddingBottom: 80 },
-  title: { fontSize: 16, fontWeight: "700", marginBottom: 10, color: "#174A6A" },
-  grid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" },
+  title: {
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: 10,
+    color: "#174A6A",
+  },
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+  },
   gridBoxSmall: {
     width: "23%",
     aspectRatio: 1,
@@ -438,12 +498,41 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   activeGridBox: { backgroundColor: "#174A6A" },
-  boxLabel: { fontSize: 11, marginTop: 6, textAlign: "center", fontWeight: "600" },
+  boxLabel: {
+    fontSize: 11,
+    marginTop: 6,
+    textAlign: "center",
+    fontWeight: "600",
+  },
   row: { flexDirection: "row" },
   label: { fontSize: 14, fontWeight: "600", marginBottom: 4 },
-  input: { borderWidth: 1, borderColor: "#174A6A", borderRadius: 10, padding: 10, backgroundColor: "#fff" },
-  button: { marginTop: 20, backgroundColor: "#174A6A", padding: 14, borderRadius: 10, alignItems: "center" },
+  input: {
+    borderWidth: 1,
+    borderColor: "#174A6A",
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: "#fff",
+  },
+  button: {
+    marginTop: 20,
+    backgroundColor: "#174A6A",
+    padding: 14,
+    borderRadius: 10,
+    alignItems: "center",
+  },
   buttonText: { color: "#fff", fontWeight: "700" },
-  snackbar: { position: "absolute", bottom: 25, left: 20, right: 20, backgroundColor: "#16A34A", padding: 12, borderRadius: 10 },
-  snackbarText: { color: "#fff", fontWeight: "700", textAlign: "center" },
+  snackbar: {
+    position: "absolute",
+    bottom: 25,
+    left: 20,
+    right: 20,
+    backgroundColor: "#16A34A",
+    padding: 12,
+    borderRadius: 10,
+  },
+  snackbarText: {
+    color: "#fff",
+    fontWeight: "700",
+    textAlign: "center",
+  },
 });
