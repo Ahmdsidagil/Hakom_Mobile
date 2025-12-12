@@ -1,5 +1,6 @@
+// ===== BAGIAN 1 / 4 =====
 // ====================================
-// 📦 database.js (FULL — Laravel sync-compatible)
+// 📦 database.js (FINAL — Laravel sync-compatible, RESTORE dari server)
 // ====================================
 
 import * as SQLite from "expo-sqlite";
@@ -8,51 +9,87 @@ import NetInfo from "@react-native-community/netinfo";
 import * as FileSystem from "expo-file-system/legacy";
 import api from "./api";
 
-let db;
+let db = null;
 let netListenerAdded = false;
+let syncInProgress = false; // to avoid concurrent syncs
+let restoreInProgress = false;
 
 const openDb = () => {
-  if (!db) db = SQLite.openDatabaseSync("local_market.db");
+  if (db) return db;
+  try {
+    if (SQLite.openDatabase) {
+      db = SQLite.openDatabase("local_market.db");
+    } else if (SQLite.openDatabaseSync) {
+      db = SQLite.openDatabaseSync("local_market.db");
+    } else {
+      throw new Error("No SQLite openDatabase available");
+    }
+  } catch (e) {
+    // Try sync open as last resort
+    try {
+      db = SQLite.openDatabaseSync("local_market.db");
+    } catch (err) {
+      console.error("Unable to open DB:", err);
+      throw err;
+    }
+  }
   return db;
 };
 
 // -----------------------------
-// Init DB + async helpers
+// Helpers: Async wrappers for db
 // -----------------------------
-export const initDatabase = async () => {
-  openDb();
-
-  if (!db.runAsync) {
-    db.runAsync = (sql, params = []) =>
+const attachAsyncHelpers = (dbInstance) => {
+  if (!dbInstance.runAsync) {
+    dbInstance.runAsync = (sql, params = []) =>
       new Promise((resolve, reject) => {
-        db.transaction((tx) => {
-          tx.executeSql(sql, params, (_, res) => resolve(res), (_, err) => reject(err));
+        dbInstance.transaction((tx) => {
+          tx.executeSql(
+            sql,
+            params,
+            (_, res) => resolve(res),
+            (_, err) => reject(err)
+          );
         });
       });
+  }
 
-    db.getAllAsync = (sql, params = []) =>
+  if (!dbInstance.getAllAsync) {
+    dbInstance.getAllAsync = (sql, params = []) =>
       new Promise((resolve, reject) => {
-        db.transaction((tx) => {
-          tx.executeSql(sql, params, (_, { rows }) => resolve(rows._array || []), (_, err) => reject(err));
+        dbInstance.transaction((tx) => {
+          tx.executeSql(
+            sql,
+            params,
+            (_, { rows }) => resolve(rows._array || []),
+            (_, err) => reject(err)
+          );
         });
       });
+  }
 
-    db.getFirstAsync = async (sql, params = []) => {
-      const rows = await db.getAllAsync(sql, params);
+  if (!dbInstance.getFirstAsync) {
+    dbInstance.getFirstAsync = async (sql, params = []) => {
+      const rows = await dbInstance.getAllAsync(sql, params);
       return rows[0] || null;
     };
   }
+};
 
-  try {
-    await runMigrationsIfNeeded();
-  } catch (e) {
-    console.warn("⚠ runMigrationsIfNeeded error:", e);
-  }
+// -----------------------------
+// Init DB + migrations
+// -----------------------------
+export const initDatabase = async () => {
+  const dbInst = openDb();
+  attachAsyncHelpers(dbInst);
 
-  const tableQueries = [
+  // create tables if not exist
+  const queries = [
     `CREATE TABLE IF NOT EXISTS categories (
        id_category INTEGER PRIMARY KEY,
-       name_category TEXT
+       name_category TEXT,
+       image TEXT,
+       local_image TEXT
      );`,
     `CREATE TABLE IF NOT EXISTS commodities (
        id_commodity INTEGER PRIMARY KEY,
@@ -118,97 +155,28 @@ export const initDatabase = async () => {
      );`,
   ];
 
-  for (const q of tableQueries) {
-    await db.runAsync(q);
+  for (const q of queries) {
+    try {
+      await dbInst.runAsync(q);
+    } catch (e) {
+      console.warn("create table failed:", e);
+    }
   }
 
-  console.log("✅ Database initialized with backend-compatible schema");
-
+  console.log("✅ Database initialized");
+  // add network listener once
   if (!netListenerAdded) {
     NetInfo.addEventListener((state) => {
-      if (state.isInternetReachable === true) {
-        console.log("🌐 Internet reachable — starting auto-sync");
-        // don't await here — function manages its own errors/logging
-        syncPricesToServer().catch((e) => console.warn("Auto sync error:", e));
+      const online =
+        typeof state.isInternetReachable === "boolean"
+          ? state.isInternetReachable
+          : state.isConnected;
+      if (online === true) {
+        // attempt background sync
+        if (!syncInProgress) syncPricesToServer().catch((e) => console.warn("Auto sync error:", e));
       }
     });
     netListenerAdded = true;
-  }
-};
-
-const runMigrationsIfNeeded = async () => {
-  const dbInst = openDb();
-
-  // ensure helper functions exist on the synchronous db instance
-  if (!dbInst.getAllAsync) {
-    dbInst.getAllAsync = (sql, params = []) =>
-      new Promise((resolve, reject) => {
-        dbInst.transaction((tx) => {
-          tx.executeSql(sql, params, (_, { rows }) => resolve(rows._array || []), (_, err) => reject(err));
-        });
-      });
-    dbInst.runAsync = (sql, params = []) =>
-      new Promise((resolve, reject) => {
-        dbInst.transaction((tx) => {
-          tx.executeSql(sql, params, (_, res) => resolve(res), (_, err) => reject(err));
-        });
-      });
-  }
-
-  const tables = await dbInst.getAllAsync(`SELECT name FROM sqlite_master WHERE type='table' AND name='commodities'`);
-  if (!tables || tables.length === 0) return;
-
-  const cols = await dbInst.getAllAsync(`PRAGMA table_info(commodities);`);
-  const columnNames = cols.map((c) => c.name);
-  if (columnNames.includes("id_commodity")) return;
-
-  console.log("🔁 Detected old commodities schema, running migration...");
-
-  try {
-    await dbInst.runAsync(
-      `CREATE TABLE IF NOT EXISTS _commodities_new (
-         id_commodity INTEGER PRIMARY KEY,
-         name_commodity TEXT,
-         category_id INTEGER,
-         category_name TEXT,
-         unit_id INTEGER,
-         image TEXT,
-         local_image TEXT
-       );`
-    );
-
-    const map = {
-      id_commodity: columnNames.includes("id") ? "id" : columnNames.includes("id_commodity") ? "id_commodity" : null,
-      name_commodity: columnNames.includes("name") ? "name" : columnNames.includes("name_commodity") ? "name_commodity" : null,
-      category_id: columnNames.includes("category_id") ? "category_id" : null,
-      category_name: columnNames.includes("category_name") ? "category_name" : null,
-      unit_id: columnNames.includes("unit_id") ? "unit_id" : columnNames.includes("id_unit") ? "id_unit" : null,
-      image: columnNames.includes("image") ? "image" : null,
-      local_image: columnNames.includes("local_image") ? "local_image" : null,
-    };
-
-    const selectExpr = [
-      map.id_commodity ? map.id_commodity : "NULL",
-      map.name_commodity ? map.name_commodity : "NULL",
-      map.category_id ? map.category_id : "NULL",
-      map.category_name ? map.category_name : "NULL",
-      map.unit_id ? map.unit_id : "NULL",
-      map.image ? map.image : "NULL",
-      map.local_image ? map.local_image : "NULL",
-    ].join(", ");
-
-    await dbInst.runAsync(
-      `INSERT INTO _commodities_new
-         (id_commodity, name_commodity, category_id, category_name, unit_id, image, local_image)
-       SELECT ${selectExpr} FROM commodities;`
-    );
-
-    await dbInst.runAsync(`ALTER TABLE commodities RENAME TO _commodities_old;`);
-    await dbInst.runAsync(`ALTER TABLE _commodities_new RENAME TO commodities;`);
-
-    console.log("✅ Migration completed: commodities table migrated to new schema.");
-  } catch (e) {
-    console.warn("⚠ Migration failed for commodities:", e);
   }
 };
 
@@ -217,113 +185,74 @@ export const getDatabase = async () => {
   return db;
 };
 
-// -----------------------------
-// Image helpers
-// -----------------------------
-export const downloadImage = async (imageUrl, filename) => {
+// =======================
+// Helper: download image
+// =======================
+export const downloadImage = async (url, filename) => {
+  if (!url || !filename) return null;
   try {
-    if (!imageUrl) return null;
-    const localUri = `${FileSystem.documentDirectory}${filename}`;
-    const info = await FileSystem.getInfoAsync(localUri);
-    if (!info.exists) {
-      await FileSystem.downloadAsync(imageUrl, localUri);
+    const dir = `${FileSystem.cacheDirectory}images/`;
+    // pastikan folder ada
+    const dirInfo = await FileSystem.getInfoAsync(dir);
+    if (!dirInfo.exists) {
+      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
     }
-    return localUri;
-  } catch (e) {
-    console.warn("⚠ downloadImage error:", e);
-    return null;
-  }
-};
+    const localUri = dir + filename;
+    // jika sudah ada, return
+    const fileInfo = await FileSystem.getInfoAsync(localUri);
+    if (fileInfo.exists) return localUri;
 
-export const getLocalImagePath = async (imageUrl) => {
-  try {
-    if (!imageUrl) return null;
-    const parts = imageUrl.split("/");
-    const filename = parts[parts.length - 1] || `img_${Date.now()}.jpg`;
-    const localUri = `${FileSystem.documentDirectory}${filename}`;
-    const info = await FileSystem.getInfoAsync(localUri);
-    return info.exists ? localUri : null;
+    // download
+    const { uri } = await FileSystem.downloadAsync(url, localUri);
+    return uri;
   } catch (e) {
-    return null;
-  }
-};
-
-export const getImageForCommodityByName = async (name) => {
-  try {
-    if (!name) return null;
-    const db = await getDatabase();
-    const row = await db.getFirstAsync(
-      `SELECT id_commodity, name_commodity, image, local_image, unit_id FROM commodities WHERE name_commodity = ? LIMIT 1;`,
-      [name]
-    );
-    if (row) return row;
-    const alt = await db.getFirstAsync(
-      `SELECT id AS id_commodity, name AS name_commodity, image, local_image, id_unit as unit_id FROM commodities WHERE name = ? LIMIT 1;`,
-      [name]
-    );
-    return alt || null;
-  } catch (err) {
+    console.warn("downloadImage failed:", e);
     return null;
   }
 };
 
 // -----------------------------
-// Helpers: parse response + ensure full URL
+// Helper: get image path for commodity by name
 // -----------------------------
-const safeParseResponseData = async (response) => {
-  try {
-    const text = await response.text();
-    const trimmed = text.trim();
-    if (trimmed.startsWith("<")) throw new Error("Response looks like HTML (not JSON)");
-    const parsed = JSON.parse(trimmed);
-    // support several possible envelopes
-    if (parsed && (parsed.data || parsed.results || parsed.latest_prices)) {
-      return parsed.data || parsed.results || parsed.latest_prices;
-    }
-    return parsed;
-  } catch (err) {
-    throw err;
-  }
+export const getImageForCommodityByName = async (commodityName) => {
+  if (!commodityName) return null;
+  const dbInst = await getDatabase();
+  const row = await dbInst.getFirstAsync(
+    `SELECT local_image, image FROM commodities WHERE name_commodity = ? LIMIT 1;`,
+    [commodityName]
+  );
+  return row?.local_image || row?.image || null;
 };
 
-const ensureFullImageUrl = (maybeImage) => {
+
+export const ensureFullImageUrl = (maybeImage) => {
   if (!maybeImage) return null;
-  if (typeof maybeImage !== "string") return null;
-  const trimmed = maybeImage.trim();
-  if (trimmed === "") return null;
-  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed;
-
-  // prefer api.IMAGE_PATH if present; else build from BASE_URL + storage path
+  if (maybeImage.startsWith("http")) return maybeImage;
   const base = api.BASE_URL ? api.BASE_URL.replace(/\/$/, "") : null;
-  const pathFromApi = api.IMAGE_PATH || (base ? `${base}/storage/commodity_images/` : null);
-  if (pathFromApi) return pathFromApi + trimmed;
-  return trimmed;
+  const path = api.IMAGE_PATH || (base ? `${base}/storage/commodity_images/` : null);
+  if (path) return path + maybeImage;
+  return maybeImage;
 };
 
-const downloadMissingLocalImages = async () => {
-  try {
-    const dbInst = await getDatabase();
-    const needs = await dbInst.getAllAsync(`SELECT id_commodity, image, local_image FROM commodities WHERE image IS NOT NULL AND (local_image IS NULL OR local_image = '')`);
-    for (const row of needs) {
-      try {
-        const fullUrl = ensureFullImageUrl(row.image);
-        if (!fullUrl) continue;
-        const filename = fullUrl.split("/").pop();
-        const local = await downloadImage(fullUrl, filename);
-        if (local) {
-          await dbInst.runAsync(`UPDATE commodities SET local_image = ? WHERE id_commodity = ?;`, [local, row.id_commodity]);
-        }
-      } catch (e) {
-        console.warn("⚠ downloadMissingLocalImages item failed", row.id_commodity, e);
-      }
-    }
-  } catch (e) {
-    console.warn("⚠ downloadMissingLocalImages failed:", e);
-  }
-};
+
 
 // -----------------------------
-// Sync from server (with image download)
+// Safe parse helpers
+// -----------------------------
+const safeParseJson = async (res) => {
+  try {
+    const text = await res.text();
+    if (!text) return null;
+    const trimmed = text.trim();
+    if (trimmed.startsWith("<")) throw new Error("HTML response");
+    return JSON.parse(trimmed);
+  } catch (e) {
+    throw e;
+  }
+};
+// ===== BAGIAN 2 / 4 =====
+// -----------------------------
+// Sync from server (categories, commodities, markets, units)
 // -----------------------------
 export const syncFromServer = async () => {
   try {
@@ -337,334 +266,346 @@ export const syncFromServer = async () => {
       units: api.UNIT,
     };
 
-    const results = {};
+    const dbInst = await getDatabase();
 
-    for (const key in endpoints) {
+    for (const key of Object.keys(endpoints)) {
       const url = endpoints[key];
-      if (!url) {
-        results[key] = null;
-        continue;
-      }
+      if (!url) continue;
       try {
         const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
         if (!res.ok) {
-          console.warn(`⚠️ Endpoint ${key} returned ${res.status}`);
-          results[key] = null;
+          console.warn(`Endpoint ${key} returned ${res.status}`);
           continue;
         }
-        const parsed = await safeParseResponseData(res);
-        results[key] = Array.isArray(parsed) ? parsed : parsed?.data ?? parsed;
-      } catch (err) {
-        console.error(`❌ Gagal fetch/parse ${key}:`, err);
-        results[key] = null;
-      }
-    }
+        const parsed = await safeParseJson(res);
+        const data = Array.isArray(parsed?.data) ? parsed.data : Array.isArray(parsed) ? parsed : [];
+        if (!data.length) continue;
 
-    const db = await getDatabase();
-
-    // Categories
-    if (results.categories) {
-      await db.runAsync("DELETE FROM categories;");
-      for (const cat of results.categories) {
-        await db.runAsync(`INSERT OR REPLACE INTO categories (id_category, name_category) VALUES (?, ?);`, [cat.id_category || cat.id, cat.name_category || cat.name || "-"]);
-      }
-      console.log("✅ Data categories saved");
-    }
-
-    // Units
-    if (results.units) {
-      await db.runAsync("DELETE FROM units;");
-      for (const u of results.units) {
-        await db.runAsync(`INSERT OR REPLACE INTO units (id, name_unit) VALUES (?, ?);`, [u.id, u.name_unit || u.name || "-"]);
-      }
-      console.log("✅ Data units saved");
-    }
-
-    // Commodities (image URL normalized + local download)
-    if (results.commodities) {
-      await db.runAsync("DELETE FROM commodities;");
-      for (const c of results.commodities) {
-        try {
-          const categoryId = c.category_id || c.category?.id || null;
-          const categoryName = c.category_name || c.category?.name_category || c.category?.name || null;
-          const nameCommodity = c.name_commodity || c.name || "-";
-          const idCommodity = c.id_commodity || c.id || null;
-          const unitId = c.unit_id || c.unit?.id || c.unit || null;
-          const rawImage = c.image || c.image_url || c.photo || null;
-
-          const imageUrl = ensureFullImageUrl(rawImage);
-          let localPath = null;
-          if (imageUrl) {
+        if (key === "categories") {
+          await dbInst.runAsync("DELETE FROM categories;");
+          for (const c of data) {
+            await dbInst.runAsync(
+              `INSERT OR REPLACE INTO categories (id_category, name_category, image) VALUES (?, ?, ?);`,
+              [c.id_category || c.id, c.name_category || c.name || "-", c.image || null]
+            );
+          }
+        } else if (key === "units") {
+          await dbInst.runAsync("DELETE FROM units;");
+          for (const u of data) {
+            await dbInst.runAsync(`INSERT OR REPLACE INTO units (id, name_unit) VALUES (?, ?);`, [u.id, u.name_unit || u.name || "-"]);
+          }
+        } else if (key === "commodities") {
+          await dbInst.runAsync("DELETE FROM commodities;");
+          for (const c of data) {
             try {
-              const filename = imageUrl.split("/").pop();
-              localPath = await downloadImage(imageUrl, filename);
+              const idCommodity = c.id_commodity || c.id || null;
+              const nameCommodity = c.name_commodity || c.name || "-";
+              const categoryId = c.category_id || c.category?.id || null;
+              const categoryName = c.category_name || c.category?.name || null;
+              const unitId = c.unit_id || c.unit?.id || c.unit || null;
+              const rawImage = c.image || c.image_url || c.photo || null;
+              const imageUrl = ensureFullImageUrl(rawImage);
+              let localPath = null;
+              if (imageUrl) {
+                try {
+                  const fname = imageUrl.split("/").pop();
+                  localPath = await downloadImage(imageUrl, fname);
+                } catch (e) {
+                  console.warn("image download failed", e);
+                }
+              }
+              await dbInst.runAsync(
+                `INSERT OR REPLACE INTO commodities (id_commodity, name_commodity, category_id, category_name, unit_id, image, local_image) VALUES (?, ?, ?, ?, ?, ?, ?);`,
+                [idCommodity, nameCommodity, categoryId, categoryName, unitId, imageUrl, localPath]
+              );
             } catch (e) {
-              console.warn("⚠ image download failed for", imageUrl, e);
+              console.warn("commodity insert error:", e);
             }
           }
-
-          await db.runAsync(
-            `INSERT OR REPLACE INTO commodities
-              (id_commodity, name_commodity, category_id, category_name, unit_id, image, local_image)
-             VALUES (?, ?, ?, ?, ?, ?, ?);`,
-            [idCommodity, nameCommodity, categoryId, categoryName, unitId, imageUrl, localPath]
-          );
-        } catch (e) {
-          console.warn("⚠ commodity insert error:", e);
+        } else if (key === "markets") {
+          await dbInst.runAsync("DELETE FROM markets;");
+          for (const m of data) {
+            await dbInst.runAsync(
+              `INSERT OR REPLACE INTO markets (id_market, name_market, address, status, description, opening_hours, maps_link, image, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+              [
+                m.id_market || m.id,
+                m.name_market || m.name || "-",
+                m.address || m.location || "-",
+                m.status || null,
+                m.description || m.desc || null,
+                m.opening_hours || m.opening || null,
+                m.maps_link || m.maps || null,
+                m.image || null,
+                m.created_at || null,
+                m.updated_at || null,
+              ]
+            );
+          }
         }
+      } catch (err) {
+        console.warn("syncFromServer endpoint error:", err);
       }
-
-      await downloadMissingLocalImages();
-      console.log("✅ Data commodities saved (images downloaded where possible)");
     }
 
-    // Markets
-    if (results.markets) {
-      await db.runAsync("DELETE FROM markets;");
-      for (const m of results.markets) {
-        await db.runAsync(
-          `INSERT OR REPLACE INTO markets (id_market, name_market, address, status, description, opening_hours, maps_link, image, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-          [
-            m.id_market || m.id,
-            m.name_market || m.name || "-",
-            m.address || m.location || "-",
-            m.status || null,
-            m.description || m.desc || null,
-            m.opening_hours || m.opening || null,
-            m.maps_link || m.maps || null,
-            m.image || null,
-            m.created_at || null,
-            m.updated_at || null,
-          ]
-        );
-      }
-      console.log("✅ Data markets saved");
-    }
-
-    console.log("📡 Sync from server finished");
+    console.log("✅ syncFromServer finished");
   } catch (err) {
-    console.error("❌ Sync from server error:", err);
+    console.error("syncFromServer failed:", err);
     throw err;
   }
 };
 
 // -----------------------------
-// Add Price (used when UI adds a price directly)
+// Add price (UI action) - local + optional online push
 // -----------------------------
-export const addPrice = async (commodityId, categoryId, price) => {
-  const db = await getDatabase();
+export const addPrice = async (commodityId, categoryId, price, opts = {}) => {
+  // opts can include: forceSync (boolean)
+  const dbInst = await getDatabase();
   const state = await NetInfo.fetch();
-  const isOnline = state.isInternetReachable === true;
+  const isOnline = typeof state.isInternetReachable === "boolean" ? state.isInternetReachable : state.isConnected;
   const token = await AsyncStorage.getItem("token");
 
-  // get user and market info from AsyncStorage (set these on login)
   const userIdRaw = await AsyncStorage.getItem("user_id");
   const marketIdRaw = await AsyncStorage.getItem("market_id");
   const userId = userIdRaw ? Number(userIdRaw) : null;
   const marketId = marketIdRaw ? Number(marketIdRaw) : null;
 
-  const commodity = await db.getFirstAsync(`SELECT name_commodity, unit_id FROM commodities WHERE id_commodity = ?`, [commodityId]);
-  const category = await db.getFirstAsync(`SELECT name_category FROM categories WHERE id_category = ?`, [categoryId]);
-  const unitRow = await db.getFirstAsync(`SELECT name_unit FROM units WHERE id = ?`, [commodity?.unit_id]);
+  const commodity = await dbInst.getFirstAsync(`SELECT name_commodity, unit_id FROM commodities WHERE id_commodity = ?`, [commodityId]);
+  const unitRow = await dbInst.getFirstAsync(`SELECT name_unit FROM units WHERE id = ?`, [commodity?.unit_id]);
   const unit = unitRow?.name_unit ?? "pcs";
+
   const now = new Date().toISOString();
   const dateOnly = now.split("T")[0];
 
-  if (isOnline && token && api.ADD_PRICE) {
+  // If online and server endpoint available, attempt server insert first
+  if ((isOnline || opts.forceSync) && token && api.ADD_PRICE) {
     try {
-      // Use the single add price endpoint from your config
-      const endpoint = api.ADD_PRICE;
-      const bodyPayload = {
+      const body = {
         commodity_id: commodityId,
         user_id: userId,
         market_id: marketId,
         price,
         date: dateOnly,
       };
-
-      const res = await fetch(endpoint, {
+      const res = await fetch(api.ADD_PRICE, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(bodyPayload),
+        body: JSON.stringify(body),
       });
-
       if (res.ok) {
-        await db.runAsync(
+        // Insert locally marked synced
+        await dbInst.runAsync(
           `INSERT INTO local_prices (commodity_id, category_id, user_id, market_id, price, unit, date, created_at, synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1);`,
           [commodityId, categoryId, userId, marketId, price, unit, dateOnly, now]
         );
-        await addRiwayatPendataan({ name_commodity: commodity?.name_commodity || `Komoditas ${commodityId}`, price, unit, name_category: category?.name_category || "-", tanggal: now });
-        return;
+        await addRiwayatPendataan({
+          name_commodity: commodity?.name_commodity || `Komoditas ${commodityId}`,
+          price,
+          unit,
+          name_category: (await dbInst.getFirstAsync(`SELECT name_category FROM categories WHERE id_category = ?`, [categoryId]))?.name_category || "-",
+          tanggal: now,
+        });
+        return { ok: true };
       } else {
         const txt = await res.text().catch(() => "");
-        console.warn("⚠ addPrice: server returned", res.status, txt);
+        console.warn("Server add price failed:", res.status, txt);
       }
-    } catch (err) {
-      console.warn("⚠ Online addPrice error:", err);
+    } catch (e) {
+      console.warn("Online addPrice error:", e);
     }
   }
 
-  // Offline fallback or if ADD_PRICE not available
-  await db.runAsync(
+  // Fallback: insert locally as unsynced
+  await dbInst.runAsync(
     `INSERT INTO local_prices (commodity_id, category_id, user_id, market_id, price, unit, date, created_at, synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0);`,
     [commodityId, categoryId, userId, marketId, price, unit, dateOnly, now]
   );
+  return { ok: false };
 };
 
 // -----------------------------
-// Sync local prices to server
-// - try batch endpoint (api.SYNC_PRICES)
-// - if batch fails, fallback to single-item endpoint (api.ADD_PRICE)
+// syncPricesToServer (batch then fallback) with lock
 // -----------------------------
 export const syncPricesToServer = async () => {
+  if (syncInProgress) {
+    console.log("sync in progress, skipping");
+    return;
+  }
+  syncInProgress = true;
+  console.log("syncPricesToServer started");
   try {
-    const db = await getDatabase();
+    const dbInst = await getDatabase();
     const token = await AsyncStorage.getItem("token");
     if (!token) {
-      console.warn("⚠ syncPricesToServer: token not found");
+      console.warn("token not found, abort sync");
+      syncInProgress = false;
       return;
     }
 
-    const unsynced = await db.getAllAsync(`SELECT * FROM local_prices WHERE synced = 0;`);
-    if (!unsynced?.length) return console.log("✅ No unsynced local prices");
+    // select unsynced = 0
+    let unsynced = await dbInst.getAllAsync(`SELECT * FROM local_prices WHERE synced = 0;`);
+    if (!unsynced.length) {
+      console.log("No unsynced items");
+      syncInProgress = false;
+      return;
+    }
 
-    // Get user/market from AsyncStorage for payload (if available)
+    // mark as in-progress = 2
+    const ids = unsynced.map((i) => i.id);
+    const placeholders = ids.map(() => "?").join(",");
+    if (ids.length) {
+      await dbInst.runAsync(`UPDATE local_prices SET synced = 2 WHERE id IN (${placeholders});`, ids);
+    }
+
+    const inProgress = await dbInst.getAllAsync(`SELECT * FROM local_prices WHERE synced = 2;`);
+    if (!inProgress.length) {
+      await dbInst.runAsync(`UPDATE local_prices SET synced = 0 WHERE synced = 2;`);
+      syncInProgress = false;
+      return;
+    }
+
     const userIdRaw = await AsyncStorage.getItem("user_id");
     const marketIdRaw = await AsyncStorage.getItem("market_id");
     const userId = userIdRaw ? Number(userIdRaw) : null;
     const marketId = marketIdRaw ? Number(marketIdRaw) : null;
 
-    // Build payload for batch sync (map to server expected shape)
-    const batchPayload = unsynced.map((it) => ({
+    const payload = inProgress.map((it) => ({
       commodity_id: it.commodity_id,
       user_id: it.user_id ?? userId,
       market_id: it.market_id ?? marketId,
       price: it.price,
       date: it.date || (it.created_at ? it.created_at.split("T")[0] : null),
-      local_id: it.id, // include local id for server ack if needed
-      created_at: it.created_at,
+      local_id: it.id,
     }));
 
-    // Try batch endpoint first (api.SYNC_PRICES)
+    // Try batch endpoint
     const batchEndpoint = api.SYNC_PRICES || `${api.BASE_URL.replace(/\/$/, "")}/sync`;
-    let batchSucceeded = false;
-
+    let batchOk = false;
     if (batchEndpoint) {
       try {
         const res = await fetch(batchEndpoint, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ prices: batchPayload }),
+          body: JSON.stringify({ prices: payload }),
         });
-
         if (res.ok) {
+          batchOk = true;
           // mark all as synced
-          for (const it of unsynced) {
-            await db.runAsync(`UPDATE local_prices SET synced = 1 WHERE id = ?;`, [it.id]);
-
-            const commodity = await db.getFirstAsync(`SELECT name_commodity FROM commodities WHERE id_commodity = ?`, [it.commodity_id]);
-            const category = await db.getFirstAsync(`SELECT name_category FROM categories WHERE id_category = ?`, [it.category_id]);
-
-            await addRiwayatPendataan({
-              name_commodity: commodity?.name_commodity || `Komoditas ${it.commodity_id}`,
-              price: it.price,
-              unit: it.unit || "-",
-              name_category: category?.name_category || "-",
-              tanggal: it.created_at,
-            });
+          for (const it of inProgress) {
+            await dbInst.runAsync(`UPDATE local_prices SET synced = 1 WHERE id = ?;`, [it.id]);
+            try {
+              await addRiwayatPendataan({
+                name_commodity: (await dbInst.getFirstAsync(`SELECT name_commodity FROM commodities WHERE id_commodity = ?`, [it.commodity_id]))?.name_commodity || `Komoditas ${it.commodity_id}`,
+                price: it.price,
+                unit: it.unit || "-",
+                name_category: (await dbInst.getFirstAsync(`SELECT name_category FROM categories WHERE id_category = ?`, [it.category_id]))?.name_category || "-",
+                tanggal: it.created_at,
+              });
+            } catch (e) {}
           }
-          console.log("✅ Batch sync succeeded for", unsynced.length, "items");
-          batchSucceeded = true;
         } else {
           const txt = await res.text().catch(() => "");
-          console.warn("⚠ Batch sync failed:", res.status, txt);
+          console.warn("Batch sync failed:", res.status, txt);
         }
-      } catch (err) {
-        console.warn("⚠ Batch sync endpoint error:", err);
+      } catch (e) {
+        console.warn("Batch endpoint error:", e);
       }
     }
 
-    if (batchSucceeded) return;
+    if (!batchOk) {
+      // fallback to single items
+      const singleEndpoint = api.ADD_PRICE || api.PRICE || `${api.BASE_URL.replace(/\/$/, "")}/sync/price`;
+      if (!singleEndpoint) {
+        console.warn("No single endpoint, resetting flags");
+        await dbInst.runAsync(`UPDATE local_prices SET synced = 0 WHERE synced = 2;`);
+        syncInProgress = false;
+        return;
+      }
 
-    // ---------- single-item fallback ----------
-    const singleEndpoint = api.ADD_PRICE || api.PRICE || `${api.BASE_URL.replace(/\/$/, "")}/sync/price`;
-    if (!singleEndpoint) {
-      console.warn("⚠ No single-item endpoint configured; cannot fallback.");
-      return;
-    }
-
-    for (const it of unsynced) {
-      try {
-        const payload = {
-          commodity_id: it.commodity_id,
-          user_id: it.user_id ?? userId,
-          market_id: it.market_id ?? marketId,
-          price: it.price,
-          date: it.date || (it.created_at ? it.created_at.split("T")[0] : null),
-        };
-
-        const res = await fetch(singleEndpoint, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-
-        if (res.ok) {
-          await db.runAsync(`UPDATE local_prices SET synced = 1 WHERE id = ?;`, [it.id]);
-
-          const commodity = await db.getFirstAsync(`SELECT name_commodity FROM commodities WHERE id_commodity = ?`, [it.commodity_id]);
-          const category = await db.getFirstAsync(`SELECT name_category FROM categories WHERE id_category = ?`, [it.category_id]);
-
-          await addRiwayatPendataan({
-            name_commodity: commodity?.name_commodity || `Komoditas ${it.commodity_id}`,
+      for (const it of inProgress) {
+        try {
+          const payloadItem = {
+            commodity_id: it.commodity_id,
+            user_id: it.user_id ?? userId,
+            market_id: it.market_id ?? marketId,
             price: it.price,
-            unit: it.unit || "-",
-            name_category: category?.name_category || "-",
-            tanggal: it.created_at,
+            date: it.date || (it.created_at ? it.created_at.split("T")[0] : null),
+          };
+          const res = await fetch(singleEndpoint, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify(payloadItem),
           });
 
-          console.log(`✅ Synced item local id ${it.id}`);
-        } else {
-          const txt = await res.text().catch(() => "");
-          console.warn(`⚠ Single sync failed for id ${it.id}:`, res.status, txt);
+          if (res.ok) {
+            await dbInst.runAsync(`UPDATE local_prices SET synced = 1 WHERE id = ?;`, [it.id]);
+            try {
+              await addRiwayatPendataan({
+                name_commodity: (await dbInst.getFirstAsync(`SELECT name_commodity FROM commodities WHERE id_commodity = ?`, [it.commodity_id]))?.name_commodity || `Komoditas ${it.commodity_id}`,
+                price: it.price,
+                unit: it.unit || "-",
+                name_category: (await dbInst.getFirstAsync(`SELECT name_category FROM categories WHERE id_category = ?`, [it.category_id]))?.name_category || "-",
+                tanggal: it.created_at,
+              });
+            } catch (e) {}
+          } else {
+            console.warn("Single sync failed for", it.id);
+          }
+        } catch (e) {
+          console.warn("Single item sync error:", e);
         }
-      } catch (err) {
-        console.warn("⚠ Single sync error for id", it.id, err);
       }
     }
+
+    // reset any leftover flags
+    try {
+      await dbInst.runAsync(`UPDATE local_prices SET synced = 0 WHERE synced = 2;`);
+    } catch (e) {
+      console.warn("Failed to reset flags:", e);
+    }
   } catch (err) {
-    console.error("❌ syncPricesToServer fatal:", err);
+    console.error("syncPricesToServer fatal:", err);
+  } finally {
+    syncInProgress = false;
+    console.log("syncPricesToServer finished");
   }
 };
-
-export const syncDataToServer = async () => {
-  return syncPricesToServer();
-};
-
+// ===== BAGIAN 3 / 4 =====
 // -----------------------------
 // Riwayat helpers
 // -----------------------------
 export const addRiwayatHapus = async (item) => {
-  const db = await getDatabase();
-  await db.runAsync(`INSERT INTO riwayat_hapus (name_commodity, price, unit, name_category, tanggal) VALUES (?, ?, ?, ?, ?);`, [item.name_commodity, item.price, item.unit, item.name_category, item.tanggal]);
+  const dbInst = await getDatabase();
+  await dbInst.runAsync(`INSERT INTO riwayat_hapus (name_commodity, price, unit, name_category, tanggal) VALUES (?, ?, ?, ?, ?);`, [
+    item.name_commodity,
+    item.price,
+    item.unit,
+    item.name_category,
+    item.tanggal,
+  ]);
 };
 
 export const addRiwayatPendataan = async (item) => {
-  const db = await getDatabase();
-  await db.runAsync(`INSERT INTO riwayat_pendataan (name_commodity, price, unit, name_category, tanggal) VALUES (?, ?, ?, ?, ?);`, [item.name_commodity, item.price, item.unit, item.name_category, item.tanggal]);
+  const dbInst = await getDatabase();
+  await dbInst.runAsync(`INSERT INTO riwayat_pendataan (name_commodity, price, unit, name_category, tanggal) VALUES (?, ?, ?, ?, ?);`, [
+    item.name_commodity,
+    item.price,
+    item.unit,
+    item.name_category,
+    item.tanggal,
+  ]);
 };
 
 export const getAllRiwayatPendataan = async () => {
-  const db = await getDatabase();
-  return db.getAllAsync(`SELECT * FROM riwayat_pendataan ORDER BY tanggal DESC;`);
+  const dbInst = await getDatabase();
+  return dbInst.getAllAsync(`SELECT * FROM riwayat_pendataan ORDER BY tanggal DESC;`);
 };
 
 // -----------------------------
-// Dashboard / screen helpers
+// Dashboard / Screen helpers
 // -----------------------------
 export const getAllLocalPrices = async () => {
-  const db = await getDatabase();
-  return db.getAllAsync(`
+  const dbInst = await getDatabase();
+  return dbInst.getAllAsync(`
     SELECT
       p.id,
       p.commodity_id,
@@ -674,6 +615,7 @@ export const getAllLocalPrices = async () => {
       p.price,
       p.unit,
       p.synced,
+      p.date AS tanggal,
       p.created_at,
       co.id_commodity,
       co.name_commodity,
@@ -693,34 +635,40 @@ export const getAllLocalPrices = async () => {
 };
 
 export const deleteLocalPrice = async (id, itemData = null) => {
-  const db = await getDatabase();
+  const dbInst = await getDatabase();
   if (itemData) {
-    await addRiwayatHapus({ name_commodity: itemData.name_commodity, price: itemData.price, unit: itemData.unit, name_category: itemData.name_category, tanggal: new Date().toISOString() });
+    await addRiwayatHapus({
+      name_commodity: itemData.name_commodity,
+      price: itemData.price,
+      unit: itemData.unit,
+      name_category: itemData.name_category,
+      tanggal: new Date().toISOString(),
+    });
   }
-  await db.runAsync(`DELETE FROM local_prices WHERE id = ?;`, [id]);
+  await dbInst.runAsync(`DELETE FROM local_prices WHERE id = ?;`, [id]);
 };
 
 export const getCategories = async () => {
-  const db = await getDatabase();
-  return db.getAllAsync(`SELECT * FROM categories;`);
+  const dbInst = await getDatabase();
+  return dbInst.getAllAsync(`SELECT * FROM categories;`);
 };
 
 export const getCommoditiesByCategory = async (categoryId) => {
-  const db = await getDatabase();
-  return db.getAllAsync(`SELECT id_commodity, name_commodity AS name, image, local_image, unit_id, category_id FROM commodities WHERE category_id = ?;`, [categoryId]);
+  const dbInst = await getDatabase();
+  return dbInst.getAllAsync(`SELECT id_commodity, name_commodity AS name, image, local_image, unit_id, category_id FROM commodities WHERE category_id = ?;`, [categoryId]);
 };
 
 export const getDashboardStats = async () => {
-  const db = await getDatabase();
-  const total = await db.getFirstAsync(`SELECT COUNT(*) AS total FROM local_prices;`);
-  const offline = await db.getFirstAsync(`SELECT COUNT(*) AS offline FROM local_prices WHERE synced = 0;`);
-  const online = await db.getFirstAsync(`SELECT COUNT(*) AS online FROM local_prices WHERE synced = 1;`);
+  const dbInst = await getDatabase();
+  const total = await dbInst.getFirstAsync(`SELECT COUNT(*) AS total FROM local_prices;`);
+  const offline = await dbInst.getFirstAsync(`SELECT COUNT(*) AS offline FROM local_prices WHERE synced = 0;`);
+  const online = await dbInst.getFirstAsync(`SELECT COUNT(*) AS online FROM local_prices WHERE synced = 1;`);
   return { total: total?.total ?? 0, offline: offline?.offline ?? 0, online: online?.online ?? 0 };
 };
 
 export const getLatestPrices = async (limit = 20) => {
-  const db = await getDatabase();
-  return db.getAllAsync(`
+  const dbInst = await getDatabase();
+  return dbInst.getAllAsync(`
     SELECT
       p.id,
       co.id_commodity,
@@ -745,7 +693,7 @@ export const getLatestPrices = async (limit = 20) => {
 };
 
 export const getLocalPricesForScreen = async (categoryId = null, commodityId = null) => {
-  const db = await getDatabase();
+  const dbInst = await getDatabase();
   let query = `
     SELECT
       p.id,
@@ -772,11 +720,111 @@ export const getLocalPricesForScreen = async (categoryId = null, commodityId = n
   if (categoryId) { query += ` AND p.category_id = ?`; params.push(categoryId); }
   if (commodityId) { query += ` AND p.commodity_id = ?`; params.push(commodityId); }
   query += ` ORDER BY p.created_at DESC;`;
-  return db.getAllAsync(query, params);
+  return dbInst.getAllAsync(query, params);
 };
 
 export const countUniqueCommodities = async () => {
-  const db = await getDatabase();
-  const result = await db.getFirstAsync(`SELECT COUNT(DISTINCT commodity_id) AS total FROM local_prices;`);
+  const dbInst = await getDatabase();
+  const result = await dbInst.getFirstAsync(`SELECT COUNT(DISTINCT commodity_id) AS total FROM local_prices;`);
   return result?.total ?? 0;
+};
+
+// -----------------------------
+// Restore ALL prices from server into local_prices (full restore)
+// - This function will fetch server endpoint (your /price/all) and write into local_prices.
+// - It is intended to be used on app reinstall / first-run to populate local DB with server data.
+// - It marks restored rows as synced=1.
+// -----------------------------
+export const restoreAllPricesFromServer = async (showProgressCb = null) => {
+  if (restoreInProgress) {
+    console.log("Restore already in progress");
+    return;
+  }
+  restoreInProgress = true;
+  try {
+    const token = await AsyncStorage.getItem("token");
+    if (!token) throw new Error("Token tidak ditemukan");
+
+    // Fetch all prices from server
+    const url = `${api.BASE_URL.replace(/\/$/, "")}/price/all`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`restoreAllPricesFromServer: server returned ${res.status}`);
+    const json = await safeParseJson(res);
+    const items = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+
+    const dbInst = await getDatabase();
+    // We'll do it in a transaction manner: delete existing server-synced rows for this market? Simpler: clear all local prices then insert restored as synced=1
+    // But we must preserve user-local unsynced records (synced=0). Strategy: delete only rows marked synced=1 (server-origin), keep synced=0.
+    try {
+      await dbInst.runAsync(`DELETE FROM local_prices WHERE synced = 1;`);
+    } catch (e) {
+      console.warn("Failed to delete old synced rows:", e);
+    }
+
+    // Insert restored prices in chunks with optional progress callback
+    const chunkSize = 200;
+    for (let i = 0; i < items.length; i += chunkSize) {
+      const chunk = items.slice(i, i + chunkSize);
+      await dbInst.runAsync("BEGIN TRANSACTION;");
+      try {
+        for (const it of chunk) {
+          // map server fields to local schema (best-effort)
+          const commodity_id = it.commodity_id || it.commodity_id;
+          const category_id = it.category_id || it.category_id || null;
+          const user_id = it.user_id || null;
+          const market_id = it.market_id || it.market_id || null;
+          const price = it.price ?? it.average_price ?? it.avg_price ?? 0;
+          const unit = it.unit || it.unit_name || "-";
+          const created_at = it.created_at || it.created_at_local || new Date().toISOString();
+          const dateOnly = created_at.split("T")[0];
+
+          await dbInst.runAsync(
+            `INSERT INTO local_prices (commodity_id, category_id, user_id, market_id, price, unit, date, created_at, synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1);`,
+            [commodity_id, category_id, user_id, market_id, price, unit, dateOnly, created_at]
+          );
+        }
+        await dbInst.runAsync("COMMIT;");
+      } catch (e) {
+        console.warn("Chunk insert failed, rolling back", e);
+        try { await dbInst.runAsync("ROLLBACK;"); } catch {}
+      }
+      if (typeof showProgressCb === "function") {
+        showProgressCb(Math.min(items.length, i + chunk.length), items.length);
+      }
+    }
+
+    console.log(`✅ Restored ${items.length} server prices into local DB`);
+    return { restored: items.length };
+  } catch (e) {
+    console.error("restoreAllPricesFromServer failed:", e);
+    throw e;
+  } finally {
+    restoreInProgress = false;
+  }
+};
+// ===== BAGIAN 4 / 4 =====
+// -----------------------------
+// Convenience default export
+// -----------------------------
+export default {
+  initDatabase,
+  getDatabase,
+  syncFromServer,
+  syncPricesToServer,
+  syncDataToServer: syncPricesToServer,
+  addPrice,
+  addRiwayatHapus,
+  addRiwayatPendataan,
+  getAllRiwayatPendataan,
+  getAllLocalPrices,
+  getLocalPricesForScreen,
+  deleteLocalPrice,
+  getCategories,
+  getCommoditiesByCategory,
+  getDashboardStats,
+  getLatestPrices,
+  countUniqueCommodities,
+  restoreAllPricesFromServer,
+  getImageForCommodityByName, // <--- tambahkan
+  ensureFullImageUrl, 
 };

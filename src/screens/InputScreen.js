@@ -1,5 +1,5 @@
 // ===============================
-// 📱 InputScreen.js (FINAL + Optimistic Update + Unit Safe Fix + Image Server Fix)
+// 📱 InputScreen.js (FINAL FIXED + SERVER IMAGE SAFE)
 // ===============================
 import React, { useEffect, useState, useRef } from "react";
 import {
@@ -17,14 +17,18 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import NetInfo from "@react-native-community/netinfo";
+
+// FIX: Import notifikasi harus benar
 import { pushNotification } from "./NotificationScreen";
 
+// FIX: DATABASE path harus benar (InputScreen di src/screens -> config ada di root/config)
 import {
   getCategories,
   getCommoditiesByCategory,
   addPrice,
   getDatabase,
 } from "../../config/database";
+
 
 export default function InputScreen({ navigation, route }) {
   const [categories, setCategories] = useState([]);
@@ -162,87 +166,97 @@ export default function InputScreen({ navigation, route }) {
     const num = parseInt(cleaned);
     return isNaN(num) ? null : num;
   };
-
-  // ===============================
-  // SUBMIT
-  // ===============================
-  const handleSubmit = async () => {
+// ===============================
+// SUBMIT (FUNGSI DIPERBAIKI: STANDBY PILIHAN)
+// ===============================
+const handleSubmit = async () => {
+    // --- 1. VALIDASI ---
     if (selectedCategories.length === 0 || !selectedCommodity || !price) {
-      Alert.alert("Peringatan", "Semua field wajib diisi!");
-      return;
+        Alert.alert("Peringatan", "Semua field wajib diisi!");
+        return;
     }
 
     const priceNum = sanitizePriceToNumber(price);
     if (priceNum === null) {
-      Alert.alert("Peringatan", "Harga tidak valid.");
-      return;
+        Alert.alert("Peringatan", "Harga tidak valid.");
+        return;
     }
 
     setLoading(true);
     try {
-      const related = selectedCategories.filter(
-        (c) => c.id_category === selectedCommodity.category_id
-      );
-
-      if (related.length === 0) {
-        Alert.alert(
-          "Peringatan",
-          "Komoditas tidak sesuai dengan kategori yang dipilih."
+        // --- 2. VALIDASI KATEGORI/KOMODITAS ---
+        const related = selectedCategories.filter(
+            (c) => c.id_category === selectedCommodity.category_id
         );
-        setLoading(false);
-        return;
-      }
 
-      const newPriceId = await addPrice(
-        selectedCommodity.id_commodity,
-        selectedCommodity.category_id,
-        priceNum
-      );
+        if (related.length === 0) {
+            Alert.alert(
+                "Peringatan",
+                "Komoditas tidak sesuai dengan kategori yang dipilih."
+            );
+            setLoading(false);
+            return;
+        }
 
-      const net = await NetInfo.fetch();
-      const msg = net.isConnected
-        ? "✅ Berhasil disimpan & tersinkron"
-        : "📦 Disimpan offline, menunggu sinkron";
+        // --- 3. PROSES SIMPAN DATA ---
+        const newPriceId = await addPrice(
+            selectedCommodity.id_commodity,
+            selectedCommodity.category_id,
+            priceNum
+        );
 
-      showSnackbar(msg);
+        // --- 4. NOTIFIKASI SUKSES ---
+        const net = await NetInfo.fetch();
+        const msg = net.isConnected
+            ? "✅ Berhasil disimpan & tersinkron"
+            : "📦 Disimpan offline, menunggu sinkron";
 
-      await pushNotification({
-        type: "success",
-        title: "Pendataan Berhasil",
-        message: `${
-          selectedCommodity.name || selectedCommodity.name_commodity
-        } telah ditambahkan`,
-      });
-
-      if (route?.params?.onAddPrice) {
-        route.params.onAddPrice({
-          id_price: newPriceId,
-          commodity_id: selectedCommodity.id_commodity,
-          name_commodity:
-            selectedCommodity.name || selectedCommodity.name_commodity,
-          price: priceNum,
-          name_unit: unit || "-",
-          created_at: new Date().toISOString(),
-          name_category: selectedCommodity.category_name || "-",
-          image: selectedCommodity.image || null,
-          synced: net.isConnected,
+        showSnackbar(msg);
+        
+        await pushNotification({
+            type: "success",
+            title: "Pendataan Berhasil",
+            message: `${selectedCommodity.name || selectedCommodity.name_commodity} telah ditambahkan`,
         });
-      }
 
-      setPrice("");
-      navigation.goBack();
+        if (route?.params?.onAddPrice) {
+            route.params.onAddPrice({
+                id_price: newPriceId,
+                commodity_id: selectedCommodity.id_commodity,
+                name_commodity: selectedCommodity.name || selectedCommodity.name_commodity,
+                price: priceNum,
+                name_unit: unit || "-",
+                created_at: new Date().toISOString(),
+                name_category: selectedCommodity.category_name || "-",
+                image: selectedCommodity.image || null,
+                synced: net.isConnected,
+            });
+        }
+
+        // --- 5. RESET HANYA HARGA & STANDBY PILIHAN ---
+        setPrice(""); // HANYA HAPUS HARGA
+
+        // Pilihan berikut dipertahankan (Standby):
+        // selectedCommodity, selectedCategories, dan unit
+
+        // Opsional: Scroll ke bagian input harga (jika layar panjang)
+        // Jika Anda ingin memastikan input harga terlihat setelah simpan
+        // (Anda perlu memastikan 'scrollRef' menargetkan area yang tepat atau menghapusnya jika tidak perlu)
+
+        // navigation.goBack(); // <-- TETAP DIHAPUS
+
     } catch (err) {
-      console.error(err);
-      showSnackbar("❌ Terjadi kesalahan");
-      await pushNotification({
-        type: "error",
-        title: "Pendataan Gagal",
-        message: `Gagal menambahkan ${selectedCommodity?.name || ""}`,
-      });
+        console.error(err);
+        showSnackbar("❌ Terjadi kesalahan");
+        await pushNotification({
+            type: "error",
+            title: "Pendataan Gagal",
+            message: `Gagal menambahkan ${selectedCommodity?.name || ""}`,
+        });
     } finally {
-      setLoading(false);
+        setLoading(false);
     }
-  };
+};
 
   // ===============================
   // FILTER
@@ -250,6 +264,34 @@ export default function InputScreen({ navigation, route }) {
   const filteredCommodities = commodities.filter((c) =>
     selectedCategories.some((cat) => cat.id_category === c.category_id)
   );
+
+  // ===============================
+  // IMAGE LOADER SUPER AMAN
+  // ===============================
+  // For your server:
+  // - Category API returns full URL in `image` (asset('images/...')) -> use directly
+  // - Commodity API may return path/filename -> prepend IMAGE_BASE
+  const SERVER_BASE = "http://103.100.27.57:5000"; // server host
+  const IMAGE_BASE = SERVER_BASE + "/"; // base for joining commodity paths
+
+  const safeImage = (primary, localImg, fallback = null) => {
+    try {
+      // If primary already full URL (categories) -> use it
+      if (primary && (primary.startsWith("http://") || primary.startsWith("https://"))) {
+        return { uri: primary };
+      }
+      // If primary is a path/filename (komoditas) -> join with IMAGE_BASE
+      if (primary && typeof primary === "string") {
+        const cleaned = primary.startsWith("/") ? primary.substring(1) : primary;
+        return { uri: IMAGE_BASE + cleaned };
+      }
+      // Fallback to local_image (offline)
+      if (localImg) return { uri: localImg };
+      return fallback;
+    } catch (e) {
+      return fallback;
+    }
+  };
 
   return (
     <KeyboardAvoidingView
@@ -271,25 +313,15 @@ export default function InputScreen({ navigation, route }) {
       <ScrollView ref={scrollRef} contentContainerStyle={styles.page}>
         {/* ============ KATEGORI ============ */}
         <Text style={styles.title}>Pilih Kategori</Text>
+
         <View style={styles.grid}>
           {categories.map((cat) => {
             const selected = selectedCategories.some(
               (c) => c.id_category === cat.id_category
             );
 
-            // ✅ AMBIL IMAGE SERVER – SAMA DENGAN KOMODITAS
-            const imgSource =
-              cat.local_image
-                ? { uri: cat.local_image }
-                : cat.image
-                ? { uri: cat.image }
-                : cat.photo
-                ? { uri: cat.photo }
-                : cat.img_url
-                ? { uri: cat.img_url }
-                : cat.image_path
-                ? { uri: cat.image_path }
-                : null;
+            // For categories, server returns full URL in cat.image (asset('images/...')), local_image as fallback
+            const imgSource = safeImage(cat.image, cat.local_image, null);
 
             return (
               <TouchableOpacity
@@ -300,13 +332,20 @@ export default function InputScreen({ navigation, route }) {
                 ]}
                 onPress={() => toggleCategory(cat)}
               >
-                {imgSource && (
+                {imgSource ? (
                   <Image
                     source={imgSource}
                     style={{ width: 45, height: 45, borderRadius: 8 }}
                     resizeMode="cover"
                   />
+                ) : (
+                  <Ionicons
+                    name="grid-outline"
+                    size={32}
+                    color={selected ? "#fff" : "#174A6A"}
+                  />
                 )}
+
                 <Text
                   style={[
                     styles.boxLabel,
@@ -327,23 +366,14 @@ export default function InputScreen({ navigation, route }) {
             <Text style={[styles.title, { marginTop: 15 }]}>
               Pilih Komoditas
             </Text>
+
             <View style={styles.grid}>
               {filteredCommodities.map((item) => {
                 const active =
                   selectedCommodity?.id_commodity === item.id_commodity;
 
-                const imgSource =
-                  item.local_image
-                    ? { uri: item.local_image }
-                    : item.image
-                    ? { uri: item.image }
-                    : item.photo
-                    ? { uri: item.photo }
-                    : item.img_url
-                    ? { uri: item.img_url }
-                    : item.image_path
-                    ? { uri: item.image_path }
-                    : null;
+                // For commodities: item.image might be filename/path -> safeImage will prepend IMAGE_BASE
+              const imgSource = safeImage(item.image, item.local_image, null);
 
                 return (
                   <TouchableOpacity
@@ -354,16 +384,25 @@ export default function InputScreen({ navigation, route }) {
                     ]}
                     onPress={() => handleSelectCommodity(item)}
                   >
-                    <Image
-                      source={imgSource}
-                      style={{
-                        width: 62,
-                        height: 56,
-                        borderRadius: 10,
-                        marginTop: 6,
-                      }}
-                      resizeMode="cover"
-                    />
+                    {imgSource ? (
+                      <Image
+                        source={imgSource}
+                        style={{
+                          width: 62,
+                          height: 56,
+                          borderRadius: 10,
+                          marginTop: 6,
+                        }}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <Ionicons
+                        name="image-outline"
+                        size={32}
+                        color={active ? "#fff" : "#174A6A"}
+                      />
+                    )}
+
                     <Text
                       style={[
                         styles.boxLabel,
@@ -387,6 +426,7 @@ export default function InputScreen({ navigation, route }) {
         {selectedCommodity && (
           <View style={{ marginTop: 25 }}>
             <Text style={styles.title}>Harga & Satuan</Text>
+
             <View style={styles.row}>
               <View style={{ flex: 1, marginRight: 10 }}>
                 <Text style={styles.label}>Harga</Text>

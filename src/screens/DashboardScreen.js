@@ -1,6 +1,6 @@
 // ===============================
-// 📱 DashboardScreen.js (FINAL VERSION)
-// Fully Matched with database.js + Laravel Backend
+// 📱 DashboardScreen.js (FINAL SAFE VERSION)
+// Fully compatible with offline/online + image fallback
 // ===============================
 
 import React, { useEffect, useState } from "react";
@@ -27,27 +27,19 @@ import {
   getAllRiwayatPendataan,
   getAllLocalPrices,
   countUniqueCommodities,
-  getLocalImagePath,
   getImageForCommodityByName,
+  ensureFullImageUrl,
+  restoreAllPricesFromServer,
 } from "../../config/database";
 
 // =========================================
 // Helper Format
 // =========================================
-
 const formatTanggalItem = (tgl) => {
   if (!tgl) return "-";
   const d = new Date(tgl);
   if (isNaN(d.getTime())) return "-";
-
-  return `${d.toLocaleDateString("id-ID", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  })}, ${d.toLocaleTimeString("id-ID", {
-    hour: "2-digit",
-    minute: "2-digit",
-  })}`;
+  return `${d.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}, ${d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}`;
 };
 
 const formatHarga = (harga) => {
@@ -58,7 +50,7 @@ const formatHarga = (harga) => {
 };
 
 // =========================================
-// Tambahkan Gambar (Offline → Online)
+// Enrich images with fallback: local → server → placeholder
 // =========================================
 const enrichItemsWithImages = async (items) => {
   const enriched = [];
@@ -66,17 +58,20 @@ const enrichItemsWithImages = async (items) => {
   for (const it of items) {
     const item = { ...it };
 
-    // Ambil dari local DB berdasarkan nama komoditas
-    if (!item.local_image && !item.image && item.name_commodity) {
-      const found = await getImageForCommodityByName(item.name_commodity);
-      if (found?.local_image) item.local_image = found.local_image;
-      else if (found?.image) item.image = found.image;
+    // 1️⃣ local_image from DB
+    if (!item.local_image && item.name_commodity) {
+      const img = await getImageForCommodityByName(item.name_commodity);
+      if (img) item.local_image = img;
     }
 
-    // Coba cek apakah gambar lokal sudah ada
+    // 2️⃣ fallback to server URL if local missing
     if (!item.local_image && item.image) {
-      const local = await getLocalImagePath(item.image);
-      if (local) item.local_image = local;
+      item.local_image = ensureFullImageUrl(item.image);
+    }
+
+    // 3️⃣ fallback placeholder
+    if (!item.local_image) {
+      item.local_image = "https://via.placeholder.com/65"; // replace with your own placeholder if needed
     }
 
     enriched.push(item);
@@ -86,146 +81,133 @@ const enrichItemsWithImages = async (items) => {
 };
 
 // =========================================
+// Load Riwayat Pendataan with dedup + online/offline safe
+// =========================================
+const loadRiwayatPendataan = async () => {
+  try {
+    const online = (await getAllRiwayatPendataan()) || []; // server-synced
+    const offline = (await getAllLocalPrices()) || []; // local unsynced
+
+    const combined = [...online, ...offline];
+
+    // Deduplicate by name + date
+    const map = new Map();
+    for (const item of combined) {
+      const key = `${item.name_commodity}_${item.tanggal?.split("T")[0] || ""}`;
+      const existing = map.get(key);
+      const timestamp = new Date(item.tanggal ?? item.created_at).getTime();
+      const existingTs = existing ? new Date(existing.tanggal ?? existing.created_at).getTime() : 0;
+      if (!existing || timestamp >= existingTs) map.set(key, item);
+    }
+
+    const unique = Array.from(map.values());
+
+    // Sort by timestamp descending
+    const sorted = unique.sort((a, b) => new Date(b.tanggal ?? b.created_at) - new Date(a.tanggal ?? a.created_at));
+
+    // Top 10 latest
+    const top10 = sorted.slice(0, 10);
+
+    // enrich images
+    return await enrichItemsWithImages(top10);
+  } catch (e) {
+    console.error("loadRiwayatPendataan error:", e);
+    return [];
+  }
+};
+
+// =========================================
 // MAIN COMPONENT
 // =========================================
 export default function DashboardScreen({ navigation }) {
-  const [dashboardData, setDashboardData] = useState({ latest_prices: [] });
-  const [user, setUser] = useState({
-    user_name: "",
-    market_name: "",
-    total_commodities: "",
-  });
-
+  const [dashboardData, setDashboardData] = useState([]);
+  const [user, setUser] = useState({ user_name: "", market_name: "", total_commodities: 0 });
   const [greeting, setGreeting] = useState("");
   const [isConnected, setIsConnected] = useState(true);
   const [uniqueCount, setUniqueCount] = useState(0);
 
   // ======================================
-  // Load Riwayat Pendataan
-  // ======================================
-  const loadRiwayatPendataan = async () => {
-    try {
-      const online = await getAllRiwayatPendataan(); // riwayat_pendataan
-      const offline = await getAllLocalPrices(); // local_prices join
-
-      const combined = [...online, ...offline];
-
-      // Hilangkan duplikasi berdasarkan name_commodity & tanggal
-      const unique = combined.filter(
-        (item, index, self) =>
-          index ===
-          self.findIndex(
-            (x) =>
-              (x.tanggal && item.tanggal && x.tanggal === item.tanggal) &&
-              x.name_commodity === item.name_commodity
-          )
-      );
-
-      // Sort terbaru
-      const sorted = unique.sort(
-        (a, b) =>
-          new Date(b.tanggal ?? b.created_at) -
-          new Date(a.tanggal ?? a.created_at)
-      );
-
-      const top10 = sorted.slice(0, 10);
-      const enriched = await enrichItemsWithImages(top10);
-
-      setDashboardData({ latest_prices: enriched });
-    } catch (err) {
-      console.error("❌ loadRiwayatPendataan:", err);
-    }
-  };
-
-  // ======================================
-  // Load Unique Count
-  // ======================================
-  const loadUniqueCount = async () => {
-    try {
-      const c = await countUniqueCommodities();
-      setUniqueCount(c ?? 0);
-    } catch (err) {
-      console.error("❌ countUnique:", err);
-    }
-  };
-
-  // ======================================
-  // Main Setup
+  // Main setup
   // ======================================
   useEffect(() => {
     let unsubscribe;
-
     const setup = async () => {
       await initDatabase();
-      await loadRiwayatPendataan();
-      await loadUniqueCount();
 
-      unsubscribe = NetInfo.addEventListener((s) =>
-        setIsConnected(s.isConnected)
-      );
+      // check connectivity
+      const net = await NetInfo.fetch();
+      setIsConnected(net.isConnected);
 
-      const token = await AsyncStorage.getItem("token");
-
-      if (token) {
-        const net = await NetInfo.fetch();
-
-        if (net.isConnected) {
-          await syncFromServer();
-          await syncPricesToServer();
-          await loadRiwayatPendataan();
-          await loadUniqueCount();
-
-          const data = await userInfo(token);
-          if (data?.success) {
-            const userData = {
-              user_name: data.user_name || "Petugas Pasar",
-              market_name: data.market_name || "Tidak diketahui",
-              total_commodities: data.total_commodities ?? 0,
-            };
-            setUser(userData);
-            await AsyncStorage.setItem("user_info", JSON.stringify(userData));
-          }
-        } else {
-          const stored = await AsyncStorage.getItem("user_info");
-          if (stored) setUser(JSON.parse(stored));
+      // restore server data if empty local
+      const allLocal = await getAllLocalPrices();
+      if (!allLocal || allLocal.length === 0) {
+        try {
+          await restoreAllPricesFromServer();
+        } catch (e) {
+          console.warn("Restore failed:", e);
         }
       }
 
-      // Greeting
-      const hour = new Date().getHours();
-      if (hour >= 4 && hour < 11) setGreeting("Selamat Pagi");
-      else if (hour >= 11 && hour < 15) setGreeting("Selamat Siang");
-      else if (hour >= 15 && hour < 18) setGreeting("Selamat Sore");
+      const token = await AsyncStorage.getItem("token");
+      if (token && net.isConnected) {
+        await syncFromServer();
+        await syncPricesToServer();
+
+        // fetch user info
+        const data = await userInfo(token);
+        if (data?.success) {
+          const userData = {
+            user_name: data.user_name || "Petugas Pasar",
+            market_name: data.market_name || "Tidak diketahui",
+            total_commodities: data.total_commodities ?? 0,
+          };
+          setUser(userData);
+          await AsyncStorage.setItem("user_info", JSON.stringify(userData));
+        }
+      } else {
+        // offline fallback
+        const stored = await AsyncStorage.getItem("user_info");
+        if (stored) setUser(JSON.parse(stored));
+      }
+
+      const greetingHour = new Date().getHours();
+      if (greetingHour >= 4 && greetingHour < 11) setGreeting("Selamat Pagi");
+      else if (greetingHour >= 11 && greetingHour < 15) setGreeting("Selamat Siang");
+      else if (greetingHour >= 15 && greetingHour < 18) setGreeting("Selamat Sore");
       else setGreeting("Selamat Malam");
+
+      // Load latest prices
+      const latest = await loadRiwayatPendataan();
+      setDashboardData(latest);
+
+      // Count unique commodities
+      const uc = await countUniqueCommodities();
+      setUniqueCount(uc ?? 0);
+
+      // NetInfo listener
+      unsubscribe = NetInfo.addEventListener((s) => setIsConnected(s.isConnected));
     };
 
     setup();
     return () => unsubscribe && unsubscribe();
   }, []);
 
-    // ======================================
-  // Navigation Handlers
   // ======================================
-  const handleTambahData = () => {
-    navigation.navigate("Input", {
-      onAddPrice: async () => {
-        await loadRiwayatPendataan();
-        await loadUniqueCount();
-      },
-    });
-  };
+  // Navigation
+  // ======================================
+  const handleTambahData = () => navigation.navigate("Input", { onAddPrice: async () => {
+    const latest = await loadRiwayatPendataan();
+    setDashboardData(latest);
+    const uc = await countUniqueCommodities();
+    setUniqueCount(uc ?? 0);
+  }});
 
   const handleNotifikasi = () => navigation.navigate("Notification");
 
-  const tanggalSekarang = new Date().toLocaleDateString("id-ID", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+  const tanggalSekarang = new Date().toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
   // ======================================
-  // RENDER UI
+  // RENDER
   // ======================================
   return (
     <View style={styles.container}>
@@ -238,15 +220,8 @@ export default function DashboardScreen({ navigation }) {
 
           <View style={styles.rightHeader}>
             <View style={styles.statusContainer}>
-              <View
-                style={[
-                  styles.statusDot,
-                  { backgroundColor: isConnected ? "#22c55e" : "#ef4444" },
-                ]}
-              />
-              <Text style={styles.statusText}>
-                {isConnected ? "Online" : "Offline"}
-              </Text>
+              <View style={[styles.statusDot, { backgroundColor: isConnected ? "#22c55e" : "#ef4444" }]} />
+              <Text style={styles.statusText}>{isConnected ? "Online" : "Offline"}</Text>
             </View>
 
             <TouchableOpacity onPress={handleNotifikasi}>
@@ -256,7 +231,6 @@ export default function DashboardScreen({ navigation }) {
         </View>
       </LinearGradient>
 
-      {/* BODY */}
       <View style={styles.body}>
         <View style={styles.infoCard}>
           <View style={styles.rowBetween}>
@@ -268,9 +242,7 @@ export default function DashboardScreen({ navigation }) {
 
             <View>
               <Text style={styles.label}>Total Komoditas</Text>
-              <Text style={styles.value}>
-                {String(user.total_commodities)}
-              </Text>
+              <Text style={styles.value}>{String(user.total_commodities)}</Text>
 
               <Text style={styles.subLabel}>Komoditas Sudah Diinput</Text>
               <Text style={styles.uniqueValue}>{String(uniqueCount)}</Text>
@@ -285,42 +257,22 @@ export default function DashboardScreen({ navigation }) {
         <Text style={styles.sectionTitle}>Pendataan Terakhir</Text>
 
         <ScrollView showsVerticalScrollIndicator={false}>
-          {dashboardData.latest_prices.length > 0 ? (
-            dashboardData.latest_prices.map((item, idx) => (
-              <View key={idx} style={styles.cardItem}>
-                <Image
-                  source={
-                    item.local_image
-                      ? { uri: item.local_image }
-                      : item.image
-                      ? { uri: item.image }
-                      : null
-                  }
-                  style={styles.image}
-                />
-
-                <View style={styles.textContainer}>
-                  <Text style={styles.itemName}>
-                    {item.name_commodity || "-"}
-                  </Text>
-
-                  <Text style={styles.itemPrice}>
-                    {formatHarga(item.price)} / {item.unit}
-                  </Text>
-
-                  <Text style={styles.itemDate}>
-                    {formatTanggalItem(item.tanggal)}
-                  </Text>
-                </View>
-
-                <View style={styles.rightSection}>
-                  <Text style={styles.itemCategory}>
-                    {item.name_category || "Lainnya"}
-                  </Text>
-                </View>
+          {dashboardData.length > 0 ? dashboardData.map((item, idx) => (
+            <View key={idx} style={styles.cardItem}>
+              <Image
+                source={{ uri: item.local_image }}
+                style={styles.image}
+              />
+              <View style={styles.textContainer}>
+                <Text style={styles.itemName}>{item.name_commodity || "-"}</Text>
+                <Text style={styles.itemPrice}>{formatHarga(item.price)} / {item.unit}</Text>
+                <Text style={styles.itemDate}>{formatTanggalItem(item.tanggal)}</Text>
               </View>
-            ))
-          ) : (
+              <View style={styles.rightSection}>
+                <Text style={styles.itemCategory}>{item.name_category || "Lainnya"}</Text>
+              </View>
+            </View>
+          )) : (
             <Text style={styles.emptyText}>Belum ada pendataan terakhir</Text>
           )}
         </ScrollView>
@@ -331,129 +283,41 @@ export default function DashboardScreen({ navigation }) {
   );
 }
 
-// ======================================
-// STYLES (tidak diubah)
-// ======================================
-
+// STYLES: sama seperti versi lama
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F3F4F6" },
-  header: {
-    paddingTop: 50,
-    paddingBottom: 40,
-    paddingHorizontal: 20,
-  },
-  headerTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
+  header: { paddingTop: 50, paddingBottom: 40, paddingHorizontal: 20 },
+  headerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   rightHeader: { flexDirection: "row", alignItems: "center" },
-  statusContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginRight: 12,
-  },
-  statusDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 6,
-    borderWidth: 1.5,
-    borderColor: "#fff",
-  },
-  statusText: {
-    color: "#fff",
-    fontSize: 13,
-    fontWeight: "600",
-    marginRight: 6,
-  },
+  statusContainer: { flexDirection: "row", alignItems: "center", marginRight: 12 },
+  statusDot: { width: 12, height: 12, borderRadius: 6, marginRight: 6, borderWidth: 1.5, borderColor: "#fff" },
+  statusText: { color: "#fff", fontSize: 13, fontWeight: "600", marginRight: 6 },
   greeting: { color: "#E0F2FE", fontSize: 16, fontWeight: "500" },
   name: { color: "#FFFFFF", fontSize: 18, fontWeight: "700" },
 
-  body: {
-    flex: 1,
-    marginTop: -20,
-    backgroundColor: "#F3F4F6",
-    borderTopLeftRadius: 25,
-    borderTopRightRadius: 25,
-    paddingHorizontal: 16,
-    paddingTop: 25,
-  },
+  body: { flex: 1, marginTop: -20, backgroundColor: "#F3F4F6", borderTopLeftRadius: 25, borderTopRightRadius: 25, paddingHorizontal: 16, paddingTop: 25 },
 
-  infoCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 15,
-    padding: 16,
-    marginBottom: 16,
-    elevation: 2,
-  },
-  rowBetween: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
+  infoCard: { backgroundColor: "#FFFFFF", borderRadius: 15, padding: 16, marginBottom: 16, elevation: 2 },
+  rowBetween: { flexDirection: "row", justifyContent: "space-between" },
   label: { color: "#6B7280", fontSize: 13 },
   value: { color: "#111827", fontSize: 15, fontWeight: "600" },
   subLabel: { color: "#6B7280", fontSize: 12, marginTop: 8 },
-  uniqueValue: {
-    color: "#111827",
-    fontSize: 15,
-    fontWeight: "700",
-  },
+  uniqueValue: { color: "#111827", fontSize: 15, fontWeight: "700" },
   dateBelowMarket: { fontSize: 12, color: "#6B7280", marginTop: 2 },
 
-  btnTambah: {
-    backgroundColor: "#174A6A",
-    paddingVertical: 10,
-    borderRadius: 10,
-    marginTop: 14,
-    alignItems: "center",
-  },
+  btnTambah: { backgroundColor: "#174A6A", paddingVertical: 10, borderRadius: 10, marginTop: 14, alignItems: "center" },
   btnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
 
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#111827",
-    marginBottom: 12,
-  },
+  sectionTitle: { fontSize: 16, fontWeight: "700", color: "#111827", marginBottom: 12 },
 
-  cardItem: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 10,
-    padding: 12,
-    elevation: 1,
-  },
-
-  image: {
-    width: 65,
-    height: 65,
-    borderRadius: 10,
-    marginRight: 12,
-  },
-
+  cardItem: { backgroundColor: "#FFFFFF", borderRadius: 10, flexDirection: "row", alignItems: "center", marginBottom: 10, padding: 12, elevation: 1 },
+  image: { width: 65, height: 65, borderRadius: 10, marginRight: 12 },
   textContainer: { flex: 1 },
-
-  rightSection: {
-    justifyContent: "center",
-    alignItems: "flex-end",
-    width: 80,
-  },
-
+  rightSection: { justifyContent: "center", alignItems: "flex-end", width: 80 },
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
   itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "600" },
   itemDate: { fontSize: 12, color: "#6B7280" },
-  itemCategory: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#174A6A",
-  },
+  itemCategory: { fontSize: 12, fontWeight: "700", color: "#174A6A" },
 
-  emptyText: {
-    color: "#6B7280",
-    textAlign: "center",
-    marginTop: 20,
-  },
+  emptyText: { color: "#6B7280", textAlign: "center", marginTop: 20 },
 });
