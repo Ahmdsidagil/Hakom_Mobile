@@ -16,12 +16,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 // ======================
 let notificationListeners = [];
 
-/**
- * Push notifikasi baru
- * type: "success" | "error" | "info"
- * title: string
- * message: string
- */
+
 export const pushNotification = async ({ type, title, message }) => {
   try {
     const stored = await AsyncStorage.getItem("notifications");

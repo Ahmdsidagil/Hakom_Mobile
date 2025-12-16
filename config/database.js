@@ -802,6 +802,51 @@ export const restoreAllPricesFromServer = async (showProgressCb = null) => {
     restoreInProgress = false;
   }
 };
+
+// -----------------------------
+// Update local price (EDIT OFFLINE)
+// -----------------------------
+export const updateLocalPrice = async (id, data) => {
+  if (!id) throw new Error("updateLocalPrice: id required");
+
+  const dbInst = await getDatabase();
+
+  const fields = [];
+  const params = [];
+
+  if (data.price !== undefined) {
+    fields.push("price = ?");
+    params.push(data.price);
+  }
+
+  if (data.unit !== undefined) {
+    fields.push("unit = ?");
+    params.push(data.unit);
+  }
+
+  if (data.synced !== undefined) {
+    fields.push("synced = ?");
+    params.push(data.synced);
+  }
+
+  // WAJIB: tandai update
+  fields.push("updated_at = ?");
+  params.push(data.updated_at || new Date().toISOString());
+
+  if (!fields.length) return;
+
+  params.push(id);
+
+  const sql = `
+    UPDATE local_prices
+    SET ${fields.join(", ")}
+    WHERE id = ?;
+  `;
+
+  await dbInst.runAsync(sql, params);
+};
+
+
 // ===== BAGIAN 4 / 4 =====
 // -----------------------------
 // Convenience default export

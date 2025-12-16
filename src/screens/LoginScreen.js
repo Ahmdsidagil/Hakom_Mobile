@@ -1,6 +1,9 @@
+// ===============================
+// 📱 LoginScreen.js (FULL FINAL + CATEGORY & UNIT FETCH FIX)
+// ===============================
 import React, { useState } from "react";
-import api from "../../config/api";
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import api, { userInfo } from "../../config/api";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   View,
   Text,
@@ -20,6 +23,7 @@ export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -28,6 +32,11 @@ export default function LoginScreen({ navigation }) {
     }
 
     try {
+      setLoading(true);
+
+      // ===============================
+      // 🔐 LOGIN
+      // ===============================
       const response = await fetch(api.LOGIN, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -36,24 +45,96 @@ export default function LoginScreen({ navigation }) {
 
       const data = await response.json();
 
-      if (!response.ok) {
+      if (!response.ok || !data.token) {
         Alert.alert("Gagal", data.message || "Login gagal!");
+        setLoading(false);
         return;
       }
 
-      // ✅ Simpan token ke AsyncStorage
-      if (data.token) {
-        await AsyncStorage.setItem('token', data.token);
-        console.log('Token disimpan:', data.token);
-      } else {
-        console.warn('Token tidak ditemukan di respons');
+      // ===============================
+      // 💾 SIMPAN TOKEN
+      // ===============================
+      await AsyncStorage.setItem("token", data.token);
+
+      // ===============================
+      // 👤 AMBIL USER INFO
+      // ===============================
+      const user = await userInfo(data.token);
+      if (user) {
+        await AsyncStorage.setItem("user", JSON.stringify(user));
       }
 
-      Alert.alert("Sukses", data.message);
+      // ===============================
+      // 📦 AMBIL KOMODITAS
+      // ===============================
+      try {
+        const resKomoditas = await fetch(api.COMMODITIES, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${data.token}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (resKomoditas.ok) {
+          const komoditas = await resKomoditas.json();
+          await AsyncStorage.setItem("commodities", JSON.stringify(komoditas));
+        } else {
+          console.warn("Fetch commodities gagal:", resKomoditas.status);
+        }
+      } catch (err) {
+        console.warn("Fetch commodities error:", err);
+      }
+
+      // ===============================
+      // 🔹 AMBIL KATEGORI
+      // ===============================
+      try {
+        const resCategories = await fetch(api.CATEGORIES, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${data.token}`,
+            "Content-Type": "application/json",
+          },
+        });
+        if (resCategories.ok) {
+          const categories = await resCategories.json();
+          await AsyncStorage.setItem("categories", JSON.stringify(categories));
+        } else {
+          console.warn("Fetch categories gagal:", resCategories.status);
+        }
+      } catch (err) {
+        console.warn("Fetch categories error:", err);
+      }
+
+      // ===============================
+      // 🔹 AMBIL UNIT (FIXED)
+      // ===============================
+      try {
+        const resUnits = await fetch(api.UNIT, { // <-- perbaikan di sini
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${data.token}`,
+            "Content-Type": "application/json",
+          },
+        });
+        if (resUnits.ok) {
+          const units = await resUnits.json();
+          await AsyncStorage.setItem("units", JSON.stringify(units));
+        } else {
+          console.warn("Fetch units gagal:", resUnits.status);
+        }
+      } catch (err) {
+        console.warn("Fetch units error:", err);
+      }
+
+      Alert.alert("Sukses", data.message || "Login berhasil");
       navigation.replace("Dashboard");
     } catch (error) {
-      console.error("Error:", error);
+      console.error("❌ Login error:", error);
       Alert.alert("Error", "Tidak dapat terhubung ke server!");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -68,7 +149,7 @@ export default function LoginScreen({ navigation }) {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.centerContent}>
-            {/* LOGO + Teks MASUK */}
+            {/* LOGO */}
             <View style={styles.logoContainer}>
               <Image
                 source={require("../assets/logo1.png")}
@@ -81,9 +162,8 @@ export default function LoginScreen({ navigation }) {
               </Text>
             </View>
 
-            {/* FORM LOGIN */}
+            {/* FORM */}
             <View style={styles.form}>
-              {/* Input Email */}
               <TextInput
                 placeholder="Alamat Email"
                 placeholderTextColor="#9CA3AF"
@@ -94,7 +174,6 @@ export default function LoginScreen({ navigation }) {
                 onChangeText={setEmail}
               />
 
-              {/* Input Password */}
               <View style={styles.passwordContainer}>
                 <TextInput
                   placeholder="Kata Sandi"
@@ -116,15 +195,18 @@ export default function LoginScreen({ navigation }) {
                 </TouchableOpacity>
               </View>
 
-              {/* Tombol Masuk */}
-              <TouchableOpacity activeOpacity={0.9} onPress={handleLogin}>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={handleLogin}
+                disabled={loading}
+              >
                 <LinearGradient
                   colors={["#174A6A", "#0B3B53"]}
                   style={styles.button}
-                  start={[0, 0]}
-                  end={[1, 1]}
                 >
-                  <Text style={styles.buttonText}>Masuk</Text>
+                  <Text style={styles.buttonText}>
+                    {loading ? "Memproses..." : "Masuk"}
+                  </Text>
                 </LinearGradient>
               </TouchableOpacity>
             </View>
@@ -136,12 +218,8 @@ export default function LoginScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  keyboardView: {
-    flex: 1,
-  },
+  container: { flex: 1 },
+  keyboardView: { flex: 1 },
   scrollContainer: {
     flexGrow: 1,
     justifyContent: "center",

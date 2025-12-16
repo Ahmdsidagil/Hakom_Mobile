@@ -24,6 +24,9 @@ import {
   syncDataToServer,
 } from "../../config/database";
 
+// Tambahkan status 'Belum Tersinkron' ke daftar status di Modal Filter
+const STATUS_OPTIONS = ["Semua", "Sudah Tersinkron", "Belum Tersinkron", "Hapus"];
+
 export default function RiwayatScreen({ navigation }) {
   const [search, setSearch] = useState("");
   const [selectedTab, setSelectedTab] = useState("Semua");
@@ -47,32 +50,50 @@ export default function RiwayatScreen({ navigation }) {
     }
   };
 
+  /**
+   * PERBAIKAN UTAMA DI SINI: Memuat data, memisahkan status sinkron, dan menggabungkannya.
+   */
   const fetchRiwayat = async () => {
     try {
-      await syncDataToServer(false);
+      // Coba sinkronisasi tapi jangan tunggu (agar UI cepat)
+      syncDataToServer(false);
 
-      const riwayatPendataan = await getAllRiwayatPendataan();
+      const allPendataan = await getAllRiwayatPendataan(); // Mengambil semua data pendataan (synced=0 & synced=1)
       const riwayatHapus = await getRiwayatHapus();
 
-      const formattedOnline = riwayatPendataan.map((item) => ({
-        ...item,
-        status: "Sudah Tersinkron",
-      }));
+      const formattedPendataan = allPendataan.map((item) => {
+        // Asumsi kolom 'synced' ada di item yang dikembalikan dari getAllRiwayatPendataan()
+        const status =
+          item.synced === 1 ? "Sudah Tersinkron" : "Belum Tersinkron";
+        return {
+          ...item,
+          status: status,
+        };
+      });
 
       const formattedHapus = riwayatHapus.map((item) => ({
         ...item,
         status: "Hapus",
       }));
 
-      const combined = [...formattedOnline, ...formattedHapus];
+      const combined = [...formattedPendataan, ...formattedHapus];
 
+      // De-duplikasi berdasarkan ID komoditas/nama + Tanggal
+      // (Logika de-duplikasi Anda sudah cukup baik)
       const uniqueMap = new Map();
       combined.forEach((item) => {
+        // Gunakan ID unik yang lebih spesifik jika ada (misalnya local_id/server_id)
         const key =
-          (item.commodity_id || item.name_commodity || "unknown") +
+          (item.local_id || item.id || item.commodity_id || "unknown") +
           "_" +
           (item.tanggal || item.created_at || "unknown");
-        if (!uniqueMap.has(key)) uniqueMap.set(key, item);
+        
+        // Hanya simpan jika belum ada, atau jika item saat ini memiliki status yang lebih "penting" 
+        // (misal: Hapus lebih penting dari Tersinkron) - namun untuk riwayat, 
+        // biarkan yang pertama masuk (asumsi urutan dari `combined` sudah sesuai prioritas jika ada duplikasi)
+        if (!uniqueMap.has(key)) {
+            uniqueMap.set(key, item);
+        }
       });
 
       const uniqueArray = Array.from(uniqueMap.values()).sort(
@@ -121,17 +142,31 @@ export default function RiwayatScreen({ navigation }) {
     return `Rp ${num.toLocaleString("id-ID")}`;
   };
 
+  /**
+   * PERBAIKAN KECIL DI SINI: Penanganan filter tanggal agar lebih fleksibel
+   */
   const filteredData = dataRiwayat.filter((item) => {
+    // 1. Filter Pencarian
     const matchSearch = item.name_commodity
       ?.toLowerCase()
       .includes(search.toLowerCase().trim());
+      
+    // 2. Filter Kategori (Tab)
     const matchCategory =
       selectedTab === "Semua" || item.name_category === selectedTab;
+      
+    // 3. Filter Status (Modal)
     const matchStatus = filterStatus === "Semua" || item.status === filterStatus;
-    const sameDay =
-      new Date(item.tanggal || item.created_at).toDateString() ===
-      selectedDate.toDateString();
-    return matchSearch && matchCategory && matchStatus && sameDay;
+    
+    // 4. Filter Tanggal
+    const itemDateString = new Date(item.tanggal || item.created_at).toDateString();
+    const selectedDateString = selectedDate.toDateString();
+    const matchDate = itemDateString === selectedDateString;
+    
+    // Jika ada tanggal yang tidak valid atau filter tanggal tidak diperlukan, Anda dapat mengubah logic 'matchDate'.
+    // Tapi untuk riwayat, biasanya filter tanggal sangat penting.
+    
+    return matchSearch && matchCategory && matchStatus && matchDate;
   });
 
   const getStatusColor = (status) => {
@@ -298,7 +333,7 @@ export default function RiwayatScreen({ navigation }) {
         >
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Filter Riwayat</Text>
-            {["Semua", "Sudah Tersinkron", "Belum Sinkron", "Hapus"].map(
+            {STATUS_OPTIONS.map( // Menggunakan STATUS_OPTIONS yang sudah diperbaiki
               (status) => (
                 <TouchableOpacity
                   key={status}
@@ -343,7 +378,7 @@ export default function RiwayatScreen({ navigation }) {
 }
 
 /* ========================== */
-/*          STYLES            */
+/* STYLES          */
 /* ========================== */
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },

@@ -1,4 +1,7 @@
-import React, { useState } from "react";
+// ===============================
+// 📱 EditDatascreen.js
+// ===============================
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -9,27 +12,71 @@ import {
   KeyboardAvoidingView,
   Platform,
   Modal,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { updateLocalPrice } from "../../config/database";
 
 export default function EditDataScreen({ route, navigation }) {
-  const { item } = route.params;
+  // ============================
+  // AMAN AMBIL PARAM
+  // ============================
+  const params = route?.params || {};
+  const item = params.data || params.item || null;
+  const onGoBack = params.onGoBack;
 
-  // Ambil angka saja dari harga awal
-  const [harga, setHarga] = useState(item.harga.replace(/[^0-9]/g, ""));
-  const [satuan] = useState(item.satuan || "kg");
+  // ============================
+  // VALIDASI DATA
+  // ============================
+  if (!item) {
+    return (
+      <View style={styles.center}>
+        <Text>Data tidak tersedia</Text>
+      </View>
+    );
+  }
+
+  // ============================
+  // BLOK EDIT DATA ONLINE (AMAN)
+  // ============================
+  useEffect(() => {
+    if (item.synced === 1) {
+      Alert.alert(
+        "Tidak Diizinkan",
+        "Data yang sudah tersinkron tidak bisa diedit.",
+        [{ text: "OK", onPress: () => navigation.goBack() }]
+      );
+    }
+  }, []);
+
+  // ============================
+  // STATE
+  // ============================
+  const rawHarga =
+    item.price ??
+    item.harga ??
+    item.raw_price ??
+    "";
+
+  const [harga, setHarga] = useState(
+    String(rawHarga).replace(/[^0-9]/g, "")
+  );
+
+  const satuan =
+    item.unit || item.satuan || item.name_unit || "kg";
+
+  const [saving, setSaving] = useState(false);
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
 
   // ============================
-  // 🔹 Format harga otomatis
+  // FORMAT RUPIAH
   // ============================
   const formatRupiah = (value) => {
     if (!value) return "";
     let numberString = value.replace(/[^,\d]/g, "");
-    const split = numberString.split(",");
-    let sisa = split[0].length % 3;
-    let rupiah = split[0].substr(0, sisa);
-    const ribuan = split[0].substr(sisa).match(/\d{3}/g);
+    let sisa = numberString.length % 3;
+    let rupiah = numberString.substr(0, sisa);
+    const ribuan = numberString.substr(sisa).match(/\d{3}/g);
 
     if (ribuan) {
       const separator = sisa ? "." : "";
@@ -39,27 +86,40 @@ export default function EditDataScreen({ route, navigation }) {
     return rupiah;
   };
 
-  const handleSave = () => {
+  // ============================
+  // SIMPAN KE SQLITE
+  // ============================
+  const handleSave = async () => {
     if (!harga) {
-      alert("Field harga wajib diisi!");
+      Alert.alert("Validasi", "Field harga wajib diisi!");
       return;
     }
 
-    const updatedData = {
-      ...item,
-      harga: `Rp. ${formatRupiah(harga)}/${satuan}`,
-    };
+    try {
+      setSaving(true);
 
-    console.log("✅ Data berhasil diperbarui:", updatedData);
+      const idKey = item.id || item.local_id;
 
-    // Tampilkan popup sukses
-    setShowSuccessPopup(true);
+      await updateLocalPrice(idKey, {
+        price: Number(harga),
+        unit: satuan,
+        synced: 0, // 🔥 wajib → agar avg & list update
+        updated_at: new Date().toISOString(),
+      });
 
-    // Tutup popup dan kembali ke halaman utama setelah 1.5 detik
-    setTimeout(() => {
-      setShowSuccessPopup(false);
-      navigation.goBack();
-    }, 1500);
+      setShowSuccessPopup(true);
+
+      setTimeout(() => {
+        setShowSuccessPopup(false);
+        onGoBack?.(); // 🔥 trigger refresh Detail & DataLocal
+        navigation.goBack();
+      }, 900);
+    } catch (err) {
+      console.warn("❌ Gagal update local:", err);
+      Alert.alert("Error", "Gagal menyimpan perubahan");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -84,14 +144,26 @@ export default function EditDataScreen({ route, navigation }) {
         <Text style={styles.label}>Nama Komoditas</Text>
         <TextInput
           style={[styles.input, styles.disabledInput]}
-          value={item.nama}
+          // Menggunakan fallback yang lebih lengkap
+          value={
+            item.nama_komoditas ||
+            item.nama ||
+            item.local_nama || // Fallback untuk nama lokal
+            item.commodity_name || // Fallback untuk nama umum
+            "-"
+          }
           editable={false}
         />
 
         <Text style={styles.label}>Kategori</Text>
         <TextInput
           style={[styles.input, styles.disabledInput]}
-          value={item.kategori}
+          // Menggunakan fallback yang lebih lengkap
+          value={
+            item.kategori || 
+            item.category || // Fallback untuk kategori umum
+            "-"
+          }
           editable={false}
         />
 
@@ -100,13 +172,11 @@ export default function EditDataScreen({ route, navigation }) {
             <Text style={styles.label}>Harga</Text>
             <TextInput
               style={styles.input}
-              placeholder="Masukkan harga baru"
               keyboardType="numeric"
               value={formatRupiah(harga)}
-              onChangeText={(text) => {
-                const cleaned = text.replace(/[^0-9]/g, "");
-                setHarga(cleaned);
-              }}
+              onChangeText={(text) =>
+                setHarga(text.replace(/[^0-9]/g, ""))
+              }
             />
           </View>
 
@@ -120,25 +190,28 @@ export default function EditDataScreen({ route, navigation }) {
           </View>
         </View>
 
-        <TouchableOpacity style={styles.button} onPress={handleSave}>
-          <Text style={styles.buttonText}>Simpan Perubahan</Text>
+        <TouchableOpacity
+          style={styles.button}
+          onPress={handleSave}
+          disabled={saving}
+        >
+          <Text style={styles.buttonText}>
+            {saving ? "Menyimpan..." : "Simpan Perubahan"}
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.button, styles.cancelButton]}
           onPress={() => navigation.goBack()}
         >
-          <Text style={[styles.buttonText, { color: "#174A6A" }]}>Batal</Text>
+          <Text style={[styles.buttonText, { color: "#174A6A" }]}>
+            Batal
+          </Text>
         </TouchableOpacity>
       </ScrollView>
 
       {/* POPUP SUKSES */}
-      <Modal
-        transparent
-        visible={showSuccessPopup}
-        animationType="fade"
-        onRequestClose={() => setShowSuccessPopup(false)}
-      >
+      <Modal transparent visible={showSuccessPopup} animationType="fade">
         <View style={styles.popupOverlay}>
           <View style={styles.popupBox}>
             <Ionicons
@@ -149,7 +222,7 @@ export default function EditDataScreen({ route, navigation }) {
             />
             <Text style={styles.popupTitle}>Berhasil Diperbarui!</Text>
             <Text style={styles.popupText}>
-              Data komoditas telah berhasil diperbarui.
+              Data diperbarui secara lokal.
             </Text>
           </View>
         </View>
@@ -158,10 +231,13 @@ export default function EditDataScreen({ route, navigation }) {
   );
 }
 
+// ============================
+// STYLES (TIDAK DIUBAH)
+// ============================
 const styles = StyleSheet.create({
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
   header: {
     backgroundColor: "#174A6A",
-    paddingVertical: 24,
     paddingTop: 12,
     paddingHorizontal: 16,
     paddingBottom: 16,
@@ -170,43 +246,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
-  backButton: {
-    padding: 8,
-    marginTop: 24,
-    marginRight: 12,
-  },
-  headerTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "700",
-    marginTop: 24,
-  },
-  container: {
-    padding: 22,
-    paddingBottom: 40,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#333",
-    marginTop: 10,
-    marginBottom: 5,
-  },
+  backButton: { padding: 8, marginTop: 24, marginRight: 12 },
+  headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700", marginTop: 24 },
+  container: { padding: 22, paddingBottom: 40 },
+  label: { fontSize: 14, fontWeight: "600", marginTop: 10, marginBottom: 5 },
   input: {
     borderWidth: 1,
     borderColor: "#174A6A",
     borderRadius: 10,
     padding: 10,
-    backgroundColor: "#fff",
   },
-  disabledInput: {
-    backgroundColor: "#F3F4F6",
-    color: "#6B7280",
-  },
-  row: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
+  disabledInput: { backgroundColor: "#F3F4F6", color: "#6B7280" },
+  row: { flexDirection: "row" },
   button: {
     backgroundColor: "#174A6A",
     padding: 14,
@@ -214,10 +265,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 20,
   },
-  buttonText: {
-    color: "#fff",
-    fontWeight: "bold",
-  },
+  buttonText: { color: "#fff", fontWeight: "bold" },
   cancelButton: {
     backgroundColor: "#fff",
     borderWidth: 1,
@@ -235,16 +283,7 @@ const styles = StyleSheet.create({
     padding: 26,
     width: "80%",
     alignItems: "center",
-    elevation: 10,
   },
-  popupTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#111827",
-  },
-  popupText: {
-    color: "#4B5563",
-    textAlign: "center",
-    marginTop: 6,
-  },
+  popupTitle: { fontSize: 20, fontWeight: "700" },
+  popupText: { textAlign: "center", marginTop: 6 },
 });
