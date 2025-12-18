@@ -1,7 +1,7 @@
 // ====================================================
-// 📱 DataLocalScreen.js (FINAL FIXED - MENGHINDARI DUPLIKASI ENTRY COUNT)
+// 📱 DataLocalScreen.js (CLEAN - NO LOADING SPINNER)
 // ====================================================
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -10,7 +10,6 @@ import {
   StyleSheet,
   Image,
   ScrollView,
-  ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -36,12 +35,7 @@ const safeParsePrice = (value) => {
 };
 
 const resolveName = (item) =>
-  item.name_commodity ||
-  item.nama ||
-  item.commodity_name ||
-  item.name ||
-  item.commodity?.name ||
-  "-";
+  item.name_commodity || item.nama || item.commodity_name || item.name || item.commodity?.name || "-";
 
 const resolveUnit = (item) =>
   item.name_unit || item.unit || item.satuan || item.commodity?.unit || "-";
@@ -50,7 +44,6 @@ const getLocalYMD = (dateInput) => {
   if (!dateInput) return null;
   const d = new Date(dateInput);
   if (isNaN(d.getTime())) return null;
-  d.setHours(0, 0, 0, 0);
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
@@ -70,28 +63,34 @@ const get30DaysAgo = () => {
   return date;
 };
 
+const formatTanggalItem = (tgl) => {
+  if (!tgl) return "-";
+  const d = new Date(tgl);
+  return `${d.toLocaleDateString("id-ID", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  })}, ${d.toLocaleTimeString("id-ID", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  })} WIB`;
+};
+
 // ========================
-// 🔥 CACHE & DATA FETCHING
+// 🔥 DATA FETCHING LOGIC
 // ========================
 const CACHE_KEY = "server_prices_cache";
 
 const saveServerDataToCache = async (data) => {
-  try {
-    await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(data));
-  } catch (err) {
-    console.error("❌ Gagal simpan cache:", err);
-  }
+  try { await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(data)); } catch (err) {}
 };
 
 const getServerDataFromCache = async () => {
   try {
     const cached = await AsyncStorage.getItem(CACHE_KEY);
-    if (!cached) return [];
-    return JSON.parse(cached);
-  } catch (err) {
-    console.error("❌ Gagal baca cache:", err);
-    return [];
-  }
+    return cached ? JSON.parse(cached) : [];
+  } catch (err) { return []; }
 };
 
 const getSyncedPricesFromServer = async (useCache = false) => {
@@ -116,83 +115,59 @@ const getSyncedPricesFromServer = async (useCache = false) => {
     const mapped = [];
 
     for (const item of data) {
+      const itemDate = new Date(item.created_at);
+      if (itemDate < thirtyDaysAgo) continue;
+
+      let localRow = null;
       try {
-        const itemDate = new Date(item.created_at);
-        if (itemDate < thirtyDaysAgo) continue;
+        localRow = await db.getFirstAsync(
+          `SELECT local_image FROM commodities WHERE id_commodity = ? LIMIT 1;`,
+          [item.commodity_id]
+        );
+      } catch {}
 
-        const commodityId = item.commodity_id;
-        const serverImage =
-          item.image || item.image_url || item.photo || item.image_url_full || null;
-
-        let localRow = null;
-        try {
-          localRow = await db.getFirstAsync(
-            `SELECT local_image, image FROM commodities WHERE id_commodity = ? LIMIT 1;`,
-            [commodityId]
-          );
-        } catch {}
-
-        mapped.push({
-          id_price: item.id_price || `${commodityId}-${getLocalYMD(item.created_at)}`,
-          commodity_id: commodityId,
-          name_commodity: item.commodity_name,
-          raw_price: item.average_price ? Number(item.average_price) : 0,
-          name_unit: item.unit_name,
-          name_category: item.category_name,
-          created_at: item.created_at || new Date().toISOString(),
-          image: serverImage || null,
-          local_image: localRow?.local_image || null,
-          synced: true,
-          is_daily_average: true,
-          entry_count: item.input_count || 1,
-        });
-      } catch (e) {
-        console.warn("⚠ getSyncedPricesFromServer item map error:", e);
-      }
+      mapped.push({
+        id_price: item.id_price,
+        commodity_id: item.commodity_id,
+        name_commodity: item.commodity_name,
+        raw_price: Number(item.average_price) || 0,
+        name_unit: item.unit_name,
+        name_category: item.category_name,
+        created_at: item.created_at,
+        image: item.image || item.image_url_full || null,
+        local_image: localRow?.local_image || null,
+        synced: true,
+        is_daily_average: true,
+        entry_count: item.input_count || 1,
+      });
     }
 
     await saveServerDataToCache(mapped);
     return mapped;
   } catch (err) {
-    console.error("❌ Gagal ambil server:", err);
     return await getServerDataFromCache();
   }
 };
 
 const getLocalPricesLast30Days = async () => {
-  try {
-    const allLocal = (await getAllLocalPrices()) || [];
-    const thirtyDaysAgo = get30DaysAgo();
-    return allLocal.filter(
-      (item) =>
-        new Date(item.created_at || item.tanggal) >= thirtyDaysAgo &&
-        !item.synced &&
-        !item.id_price
-    );
-  } catch (err) {
-    console.error("❌ Gagal ambil data lokal:", err);
-    return [];
-  }
+  const allLocal = (await getAllLocalPrices()) || [];
+  const thirtyDaysAgo = get30DaysAgo();
+  return allLocal.filter(
+    (item) => new Date(item.created_at || item.tanggal) >= thirtyDaysAgo && !item.synced
+  );
 };
 
 const mergeServerAndLocal = (serverRows, localRows) => {
   const finalDataMap = new Map();
-
   for (const item of localRows) {
-    const localKey = item.local_id || item.id || `local-${Math.random()}`;
-    finalDataMap.set(localKey, { ...item, source: "local", synced: false, is_daily_average: false });
+    const key = `local-${item.local_id || item.id}`;
+    finalDataMap.set(key, { ...item, synced: false });
   }
-
   for (const item of serverRows) {
-    const serverKey = `${item.commodity_id}-${getLocalYMD(item.created_at)}`;
-    finalDataMap.set(`server-${serverKey}`, { ...item, source: "server", synced: true, is_daily_average: true });
+    const key = `server-${item.commodity_id}-${getLocalYMD(item.created_at)}`;
+    finalDataMap.set(key, { ...item, synced: true });
   }
-
-  return Array.from(finalDataMap.values()).sort((a, b) => {
-    const aTime = new Date(a.created_at || a.tanggal).getTime();
-    const bTime = new Date(b.created_at || b.tanggal).getTime();
-    return (isNaN(bTime) ? 0 : bTime) - (isNaN(aTime) ? 0 : aTime);
-  });
+  return Array.from(finalDataMap.values());
 };
 
 // ========================
@@ -206,17 +181,25 @@ export default function DataLocalScreen({ navigation }) {
   const [kategori, setKategori] = useState(["Semua"]);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [loading, setLoading] = useState(false);
 
-  const fetchCategories = async () => {
+  // Kategori dinamis
+  const updateCategories = useCallback((mergedData) => {
+    const dynamicCats = mergedData.map(item => 
+      item.name_category || item.category || item.kategori || "Lainnya"
+    );
+    const uniqueCats = ["Semua", ...new Set(dynamicCats.filter(Boolean))];
+    setKategori(uniqueCats);
+  }, []);
+
+  const fetchMasterCategories = async () => {
     try {
       const db = await getDatabase();
-      const result = await db.getAllAsync("SELECT * FROM categories;");
-      const names = result.map((c) => c.name_category);
-      setKategori(["Semua", ...names.filter(Boolean)]);
-    } catch (e) {
-      console.error("❌ Gagal ambil kategori:", e);
-    }
+      const result = await db.getAllAsync("SELECT name_category FROM categories;");
+      if (result.length > 0) {
+        const names = result.map((c) => c.name_category).filter(Boolean);
+        setKategori(prev => ["Semua", ...new Set([...prev, ...names])]);
+      }
+    } catch (e) {}
   };
 
   const processDataForDisplay = (listData) =>
@@ -227,24 +210,19 @@ export default function DataLocalScreen({ navigation }) {
         const tanggal = item.created_at || item.tanggal;
         if (name === "-" || priceNum <= 0 || !tanggal) return null;
 
-        const resolvedCategory =
-          item.name_category || item.category || item.kategori || item.commodity?.category_name || "Lainnya";
-
-        const isSynced = item.synced;
-
         return {
-          id: item.id_price || item.id || item.local_id || `${item.commodity_id}-${Math.random()}`,
+          id: item.id_price || item.id || item.local_id || Math.random().toString(),
           commodity_id: item.commodity_id,
           nama: name,
           raw_price: priceNum,
           harga: `Rp ${priceNum.toLocaleString("id-ID")}`,
           satuan: resolveUnit(item),
           tanggal,
-          kategori: resolvedCategory,
+          kategori: item.name_category || item.category || item.kategori || "Lainnya",
           image: item.image || null,
-          local_image: item.local_image || item.localImage || null,
-          synced: isSynced,
-          status: isSynced ? "Tersinkron" : "Belum Tersinkron",
+          local_image: item.local_image || null,
+          synced: item.synced,
+          status: item.synced ? "Tersinkron" : "Belum Tersinkron",
           is_daily_average: item.is_daily_average || false,
           entry_count_server: item.entry_count || 1,
         };
@@ -252,47 +230,34 @@ export default function DataLocalScreen({ navigation }) {
       .filter(Boolean);
 
   const fetchData = async () => {
-    setLoading(true);
     try {
       const net = await NetInfo.fetch();
       const isOnline = !!net.isConnected;
       const local = await getLocalPricesLast30Days();
       const server = await getSyncedPricesFromServer(!isOnline);
       const merged = mergeServerAndLocal(server, local);
-      setDataKomoditas(processDataForDisplay(merged));
+      
+      const processed = processDataForDisplay(merged);
+      setDataKomoditas(processed);
+      updateCategories(processed);
     } catch (err) {
-      console.error("❌ fetchData:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const autoSync = async () => {
-    const state = await NetInfo.fetch();
-    if (state.isConnected) {
-      try {
-        await syncPricesToServer();
-      } catch {}
-      await fetchData();
+      console.error(err);
     }
   };
 
   useFocusEffect(
     useCallback(() => {
-      fetchCategories();
+      fetchMasterCategories();
       fetchData();
       const unsub = NetInfo.addEventListener((state) => {
-        if (state.isConnected) autoSync();
+        if (state.isConnected) syncPricesToServer().then(() => fetchData());
       });
       return () => unsub();
     }, [route.params?.refresh])
   );
 
-  // ===================================================================
-  // 💥 LOGIKA GROUPING (MENGHINDARI DUPLIKASI ENTRY COUNT)
-  // ===================================================================
   const groupedCommodities = useMemo(() => {
-    const selectedDateStr = getLocalYMD(selectedDate.toISOString());
+    const selectedDateStr = getLocalYMD(selectedDate);
 
     const filtered = dataKomoditas.filter((item) => {
       const itemDateStr = getLocalYMD(item.tanggal);
@@ -306,63 +271,47 @@ export default function DataLocalScreen({ navigation }) {
     const localRawMap = new Map();
     const finalGroup = [];
 
-    // 1. Server Average
-    for (const item of filtered) {
-      if (item.is_daily_average) serverAverageMap.set(item.commodity_id, item);
-    }
+    filtered.forEach(item => {
+      if (item.is_daily_average) {
+        serverAverageMap.set(item.commodity_id, item);
+      }
+    });
 
-    // 2. Local Raw Data
-    for (const item of filtered) {
-      if (item.is_daily_average || serverAverageMap.has(item.commodity_id)) continue;
+    filtered.forEach(item => {
+      if (!item.is_daily_average && !serverAverageMap.has(item.commodity_id)) {
+        const id = item.commodity_id;
+        if (!localRawMap.has(id)) {
+          localRawMap.set(id, { totalPrice: 0, count: 0, latestItem: item });
+        }
+        const current = localRawMap.get(id);
+        current.totalPrice += item.raw_price;
+        current.count += 1;
+        if (new Date(item.tanggal) > new Date(current.latestItem.tanggal)) {
+          current.latestItem = item;
+        }
+      }
+    });
 
-      const id = item.commodity_id;
-      if (!localRawMap.has(id))
-        localRawMap.set(id, { totalPrice: 0, count: 0, latestItem: item });
-
-      const current = localRawMap.get(id);
-      current.totalPrice += item.raw_price;
-      current.count += 1;
-      if (new Date(item.tanggal) > new Date(current.latestItem.tanggal)) current.latestItem = item;
-    }
-
-    // 3. Gabungkan
-    for (const item of serverAverageMap.values()) {
+    serverAverageMap.forEach(item => {
       finalGroup.push({
-        id: item.id,
-        commodity_id: item.commodity_id,
-        nama: item.nama,
-        harga: item.raw_price > 0 ? `Rp ${item.raw_price.toLocaleString("id-ID")}` : "-",
-        raw_price: item.raw_price,
-        satuan: resolveUnit(item),
-        tanggal: item.tanggal,
-        kategori: item.kategori,
-        image: item.image,
-        local_image: item.local_image,
+        ...item,
         status: "Tersinkron",
-        entry_count: item.entry_count_server || 1,
+        entry_count: item.entry_count_server,
       });
-    }
+    });
 
-    for (const [id, group] of localRawMap.entries()) {
-      if (serverAverageMap.has(id)) continue;
-      const avg = group.count ? Math.round(group.totalPrice / group.count) : 0;
+    localRawMap.forEach((group) => {
+      const avg = Math.round(group.totalPrice / group.count);
       finalGroup.push({
-        id: group.latestItem.id,
-        commodity_id: id,
-        nama: group.latestItem.nama,
-        harga: avg > 0 ? `Rp ${avg.toLocaleString("id-ID")}` : "-",
+        ...group.latestItem,
+        harga: `Rp ${avg.toLocaleString("id-ID")}`,
         raw_price: avg,
-        satuan: group.latestItem.satuan,
-        tanggal: group.latestItem.tanggal,
-        kategori: group.latestItem.kategori,
-        image: group.latestItem.image,
-        local_image: group.latestItem.local_image,
         status: "Belum Tersinkron",
         entry_count: group.count,
       });
-    }
+    });
 
-    return finalGroup.sort((a, b) => new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime());
+    return finalGroup.sort((a, b) => new Date(b.tanggal) - new Date(a.tanggal));
   }, [dataKomoditas, search, selectedTab, selectedDate]);
 
   const handleDateChange = (event, d) => {
@@ -370,22 +319,8 @@ export default function DataLocalScreen({ navigation }) {
     if (d) setSelectedDate(getLocalDateMidnight(d));
   };
 
-  const formatTanggalHeader = () =>
-    selectedDate.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
-
-  const formatTanggalItem = (tgl) => {
-    if (!tgl) return "-";
-    const d = new Date(tgl);
-    if (isNaN(d.getTime())) return "-";
-    return `${d.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}, ${d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", hour12: false })}`;
-  };
-
-  // ======================================
-  // 💻 RENDER
-  // ======================================
   return (
     <View style={styles.container}>
-      {/* HEADER */}
       <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
         <View style={styles.headerTop}>
           <Text style={styles.headerTitle}>Rata-Rata Harga Komoditas</Text>
@@ -393,17 +328,6 @@ export default function DataLocalScreen({ navigation }) {
             <Ionicons name="time-outline" size={24} color="#fff" />
           </TouchableOpacity>
         </View>
-
-        {showDatePicker && (
-          <DateTimePicker
-            value={selectedDate}
-            mode="date"
-            display="calendar"
-            onChange={handleDateChange}
-            maximumDate={new Date()}
-            minimumDate={get30DaysAgo()}
-          />
-        )}
 
         <View style={styles.searchContainer}>
           <Ionicons name="search" size={18} color="#6B7280" />
@@ -419,16 +343,17 @@ export default function DataLocalScreen({ navigation }) {
         <View style={styles.filterRow}>
           <TouchableOpacity style={styles.filterBox} onPress={() => setShowDatePicker(true)}>
             <Ionicons name="calendar-outline" size={16} color="#174A6A" />
-            <Text style={styles.filterText}>{formatTanggalHeader()}</Text>
+            <Text style={styles.filterText}>
+              {selectedDate.toLocaleDateString("id-ID", { day: "numeric", month: "short" })}
+            </Text>
           </TouchableOpacity>
-
           <View style={styles.filterBox}>
             <Ionicons name="cube-outline" size={16} color="#174A6A" />
-            <Text style={styles.filterText}>Total: {groupedCommodities.length} Komoditas</Text>
+            <Text style={styles.filterText}>{groupedCommodities.length} Komoditas</Text>
           </View>
         </View>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 12 }}>
           <View style={styles.tabRow}>
             {kategori.map((item, index) => (
               <TouchableOpacity
@@ -445,11 +370,12 @@ export default function DataLocalScreen({ navigation }) {
         </ScrollView>
       </LinearGradient>
 
-      {/* LIST */}
+      {showDatePicker && (
+        <DateTimePicker value={selectedDate} mode="date" display="calendar" onChange={handleDateChange} />
+      )}
+
       <ScrollView style={styles.listContainer}>
-        {loading ? (
-          <ActivityIndicator size="large" color="#174A6A" style={{ marginTop: 50 }} />
-        ) : groupedCommodities.length ? (
+        {groupedCommodities.length ? (
           groupedCommodities.map((item) => (
             <TouchableOpacity
               key={item.id}
@@ -464,25 +390,16 @@ export default function DataLocalScreen({ navigation }) {
                 })
               }
             >
-              {/* IMAGE */}
-              {item.local_image || item.image ? (
-                <Image
-                  source={{ uri: item.local_image || item.image }}
-                  style={{ width: 64, height: 64, borderRadius: 10, marginEnd: 8, backgroundColor: "#EEE" }}
-                />
-              ) : (
-                <View style={{ width: 64, height: 64, borderRadius: 10, marginEnd: 8, backgroundColor: "#EEE", alignItems: "center", justifyContent: "center" }}>
-                  <Ionicons name="image-outline" size={24} color="#9CA3AF" />
-                </View>
-              )}
-
+              <Image
+                source={item.local_image || item.image ? { uri: item.local_image || item.image } : null}
+                style={styles.itemImage}
+              />
               <View style={styles.leftSection}>
                 <Text style={styles.itemName}>{item.nama}</Text>
                 <Text style={styles.itemPrice}>{item.harga} / {item.satuan}</Text>
                 <Text style={styles.avgPrice}>Diinput {item.entry_count} kali (Hari Ini)</Text>
                 <Text style={styles.itemDate}>Update Terakhir: {formatTanggalItem(item.tanggal)}</Text>
               </View>
-
               <View style={styles.rightSection}>
                 <Text style={styles.itemCategory}>{item.kategori}</Text>
                 <Text style={[styles.statusText, { color: item.status === "Tersinkron" ? "#16A34A" : "#DC2626" }]}>
@@ -495,9 +412,6 @@ export default function DataLocalScreen({ navigation }) {
           <View style={{ alignItems: "center", marginTop: 50 }}>
             <Ionicons name="file-tray-outline" size={48} color="#CBD5E1" />
             <Text style={styles.emptyText}>Tidak ada data di tanggal ini.</Text>
-            <Text style={{ color: "#94A3B8", fontSize: 12, marginTop: 4 }}>
-              Coba ubah tanggal, masukkan data baru, atau pastikan kategori dipilih dengan benar.
-            </Text>
           </View>
         )}
       </ScrollView>
@@ -508,12 +422,10 @@ export default function DataLocalScreen({ navigation }) {
           <Ionicons name="home-outline" size={24} color="#6B7280" />
           <Text style={styles.navText}>Beranda</Text>
         </TouchableOpacity>
-
         <TouchableOpacity style={styles.navItem}>
           <Ionicons name="folder" size={24} color="#174A6A" />
           <Text style={[styles.navText, styles.navTextActive]}>Rata-rata</Text>
         </TouchableOpacity>
-
         <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate("Profile")}>
           <Ionicons name="person-outline" size={24} color="#6B7280" />
           <Text style={styles.navText}>Profil</Text>
@@ -523,9 +435,6 @@ export default function DataLocalScreen({ navigation }) {
   );
 }
 
-// ===============================
-// 🎨 STYLES
-// ===============================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F9FAFB" },
   header: { paddingTop: 50, paddingHorizontal: 16, paddingBottom: 16, borderBottomLeftRadius: 20, borderBottomRightRadius: 20 },
@@ -536,22 +445,23 @@ const styles = StyleSheet.create({
   filterRow: { flexDirection: "row", justifyContent: "space-between", marginTop: 12 },
   filterBox: { flexDirection: "row", alignItems: "center", backgroundColor: "#E0F2FE", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
   filterText: { marginLeft: 5, color: "#174A6A", fontWeight: "600" },
-  tabRow: { flexDirection: "row", marginTop: 10, paddingBottom: 4 },
-  tabItem: { backgroundColor: "transparent", paddingVertical: 6, paddingHorizontal: 12, marginRight: 8, borderRadius: 20, borderWidth: 1, borderColor: "#fff" },
+  tabRow: { flexDirection: "row" },
+  tabItem: { paddingVertical: 6, paddingHorizontal: 12, marginRight: 8, borderRadius: 20, borderWidth: 1, borderColor: "#fff" },
   tabActive: { backgroundColor: "#fff" },
   tabText: { color: "#fff", fontWeight: "500" },
   tabTextActive: { color: "#174A6A", fontWeight: "700" },
   listContainer: { padding: 16 },
-  card: { flexDirection: "row", backgroundColor: "#fff", borderRadius: 12, padding: 12, marginBottom: 10, elevation: 2, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 3, alignItems: "center", paddingRight: 16 },
-  leftSection: { flex: 1, justifyContent: "center" },
-  rightSection: { minWidth: 110, alignItems: "flex-end", justifyContent: "center" },
+  card: { flexDirection: "row", backgroundColor: "#fff", borderRadius: 12, padding: 12, marginBottom: 10, elevation: 2, alignItems: "center" },
+  itemImage: { width: 64, height: 64, borderRadius: 10, marginEnd: 12, backgroundColor: "#EEE" },
+  leftSection: { flex: 1 },
+  rightSection: { alignItems: "flex-end", minWidth: 100 },
   itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
-  itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "700", marginTop: 2 },
-  itemDate: { fontSize: 11, color: "#6B7280", marginTop: 4 },
-  avgPrice: { fontSize: 12, color: "#0F172A", fontWeight: "700", marginTop: 3 },
-  itemCategory: { fontSize: 13, color: "#174A6A", fontWeight: "700" },
-  statusText: { fontSize: 12, fontWeight: "700" },
-  emptyText: { textAlign: "center", marginTop: 10, color: "#64748B", fontSize: 16, fontWeight: "600" },
+  itemPrice: { fontSize: 14, color: "#174A6A", fontWeight: "700" },
+  avgPrice: { fontSize: 11, color: "#1e293b", fontWeight: "700", marginTop: 2 },
+  itemDate: { fontSize: 10, color: "#64748b", marginTop: 2 },
+  itemCategory: { fontSize: 12, color: "#174A6A", fontWeight: "700" },
+  statusText: { fontSize: 11, fontWeight: "700" },
+  emptyText: { marginTop: 10, color: "#64748B", fontSize: 16 },
   bottomNav: { flexDirection: "row", justifyContent: "space-around", backgroundColor: "#fff", paddingVertical: 10, borderTopWidth: 1, borderTopColor: "#E5E7EB" },
   navItem: { alignItems: "center" },
   navText: { color: "#6B7280", fontSize: 12 },

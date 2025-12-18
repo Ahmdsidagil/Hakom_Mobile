@@ -1,10 +1,7 @@
 // ====================================================
-// 📱 DetailHargaScreen.js (FINAL & ROBUST VERSION)
-// Tampilan detail harga harian per komoditas.
-// Memuat dan memfilter data 30 hari lokal.
+// 📱 DetailHargaScreen.js
 // ====================================================
-
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import {
   View,
   Text,
@@ -13,483 +10,303 @@ import {
   Image,
   TouchableOpacity,
   Alert,
-  Platform,
   ActivityIndicator,
+  Platform,
 } from "react-native";
 import { useRoute, useNavigation, useFocusEffect } from "@react-navigation/native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
-import {
-  getAllLocalPrices,
-  deleteLocalPrice,
-} from "../../config/database";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { getAllLocalPrices, deleteLocalPrice } from "../../config/database";
 
-// ==============================
-// 📌 HELPERS
-// ==============================
+const CACHE_KEY = "server_prices_cache";
 
-// Format tanggal untuk tampilan header
-const formatTanggalHeader = (tgl) => {
-  if (!tgl) return "-";
-  const dateObj = tgl instanceof Date ? tgl : new Date(tgl);
-  if (isNaN(dateObj.getTime())) return "Tanggal Invalid";
-
-  return dateObj.toLocaleDateString("id-ID", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
+// Helper Tanggal agar format YYYY-MM-DD konsisten di seluruh aplikasi
+const getLocalYMD = (dateInput) => {
+  if (!dateInput) return null;
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
-
-// Menghitung tanggal 30 hari yang lalu
-const get30DaysAgo = () => {
-  const d = new Date();
-  d.setDate(d.getDate() - 30);
-  d.setHours(0, 0, 0, 0);
-  return d;
-};
-
-// Convert nilai ke number aman
-const safeNumber = (v) => {
-  const n = Number(v);
-  return isNaN(n) ? 0 : n;
-};
-
-// Ambil tanggal item (prioritas: updated_at > created_at > tanggal)
-const getItemDate = (item) => item.updated_at || item.created_at || item.tanggal;
-
-// Ambil harga item (price atau raw_price)
-const getItemPrice = (item) => safeNumber(item.price ?? item.raw_price);
-
-// ==============================
-// 📌 COMPONENT
-// ==============================
 
 export default function DetailHargaScreen() {
   const route = useRoute();
   const navigation = useNavigation();
-  const { commodity_id, nama_komoditas, kategori, satuan, selectedDate } =
-    route.params || {};
+  
+  // Data dikirim dari DataLocalScreen
+  const { 
+    commodity_id, 
+    nama_komoditas, 
+    kategori, 
+    satuan, 
+    selectedDate: passedDate 
+  } = route.params || {};
 
-  // ==========================
-  // State
-  // ==========================
-  const [allPrices, setAllPrices] = useState([]);
+  const [localEntries, setLocalEntries] = useState([]); 
+  const [serverData, setServerData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [date, setDate] = useState(selectedDate ? new Date(selectedDate) : new Date());
+  const [date, setDate] = useState(passedDate ? new Date(passedDate) : new Date());
   const [showPicker, setShowPicker] = useState(false);
 
+  // State Fitur Hapus
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
 
-  // ==========================
-  // 1️⃣ Fetch Data Local 30 Hari
-  // ==========================
   const fetchData = useCallback(async () => {
-    if (!commodity_id) {
-      setLoading(false);
-      return;
-    }
     setLoading(true);
     try {
-      const local = await getAllLocalPrices();
-      const thirtyDaysAgo = get30DaysAgo();
+      const targetDateStr = getLocalYMD(date);
 
-      const filtered = local.filter((item) => {
-        if (String(item.commodity_id) !== String(commodity_id)) return false;
-        const d = new Date(getItemDate(item));
-        return !isNaN(d.getTime()) && d >= thirtyDaysAgo;
-      });
+      // 1. Ambil Data Lokal dari SQLite
+      const allLocal = (await getAllLocalPrices()) || [];
+      const filteredLocal = allLocal.filter(item => 
+        String(item.commodity_id) === String(commodity_id) && 
+        getLocalYMD(item.tanggal || item.created_at) === targetDateStr
+      ).map(item => ({
+        ...item,
+        id: item.id || item.local_id,
+        harga_angka: Number(item.price || item.harga || 0),
+        is_synced: item.synced === 1 || item.synced === true 
+      }));
 
-      setAllPrices(filtered);
+      // 2. Ambil Data Server dari Cache AsyncStorage
+      const cached = await AsyncStorage.getItem(CACHE_KEY);
+      const allServer = cached ? JSON.parse(cached) : [];
+      const matchedServer = allServer.find(item => 
+        String(item.commodity_id) === String(commodity_id) && 
+        getLocalYMD(item.created_at) === targetDateStr
+      );
+
+      setLocalEntries(filteredLocal);
+      setServerData(matchedServer);
     } catch (e) {
-      console.error("fetchData error:", e);
-      Alert.alert("Error", "Gagal memuat data harga.");
+      console.error("Fetch Detail Error:", e);
     } finally {
       setLoading(false);
     }
-  }, [commodity_id]);
+  }, [commodity_id, date]);
 
-  // ==========================
-  // 2️⃣ Fokus Layar -> Fetch
-  // ==========================
-  useFocusEffect(
-    useCallback(() => {
-      setSelectionMode(false);
-      setSelectedIds([]);
-      fetchData();
-    }, [fetchData])
-  );
-
-  // ==========================
-  // 3️⃣ Filter Berdasarkan Tanggal
-  // ==========================
-  const filteredItems = useMemo(() => {
-    const selected = new Date(date);
-    selected.setHours(0, 0, 0, 0);
-
-    return allPrices
-      .filter((item) => {
-        const d = new Date(getItemDate(item));
-        if (isNaN(d.getTime())) return false;
-        d.setHours(0, 0, 0, 0);
-        return d.getTime() === selected.getTime();
-      })
-      .sort((a, b) => new Date(getItemDate(b)) - new Date(getItemDate(a)));
-  }, [allPrices, date]);
-
-  // ==========================
-  // 4️⃣ Hitung Rata-Rata
-  // ==========================
-  const headerAvg = useMemo(() => {
-    if (!filteredItems.length) return 0;
-    const total = filteredItems.reduce((sum, it) => sum + getItemPrice(it), 0);
-    return Math.round(total / filteredItems.length);
-  }, [filteredItems]);
-
-  // ==========================
-  // 5️⃣ Handler Date Picker
-  // ==========================
-  const handleDateChange = (event, selectedDate) => {
-    const newDate = selectedDate || date;
-    setShowPicker(Platform.OS === "ios");
-    setDate(newDate);
+  // Refresh data setiap kali layar difokuskan
+  useFocusEffect(useCallback(() => { 
     setSelectionMode(false);
     setSelectedIds([]);
-  };
+    fetchData(); 
+  }, [fetchData]));
 
-  // ==========================
-  // 6️⃣ Selection Mode & Toggle
-  // ==========================
-  const toggleSelect = (idKey) =>
-    setSelectedIds((prevIds) =>
-      prevIds.includes(idKey) ? prevIds.filter((x) => x !== idKey) : [...prevIds, idKey]
-    );
+  // --- LOGIKA HEADER: RATA-RATA TOTAL (LOKAL + SERVER) ---
+  const headerStats = useMemo(() => {
+    let totalHargaInputan = 0;
+    let totalCount = 0;
 
-  const handleLongPressItem = (item) => {
-    if (!item.synced) {
-      const idKey = item.id || item.local_id;
-      setSelectionMode(true);
-      toggleSelect(idKey);
+    // Tambah kontribusi dari data Lokal di HP ini
+    localEntries.forEach(item => {
+      totalHargaInputan += item.harga_angka;
+      totalCount += 1;
+    });
+
+    // Tambah kontribusi dari data Server (Inputan orang lain)
+    if (serverData) {
+      const sCount = Number(serverData.total_input || 1);
+      const sPrice = Number(serverData.raw_price || serverData.average_price || 0);
+      totalHargaInputan += (sPrice * sCount);
+      totalCount += sCount;
     }
-  };
 
-  const handlePressItem = (item) => {
-    if (selectionMode && !item.synced) {
-      const idKey = item.id || item.local_id;
-      toggleSelect(idKey);
-    }
-  };
+    return {
+      avg: totalCount > 0 ? Math.round(totalHargaInputan / totalCount) : 0,
+      count: totalCount
+    };
+  }, [localEntries, serverData]);
 
-  // ==========================
-  // 7️⃣ Edit Item (Offline Only)
-  // ==========================
-  const handleEdit = (item) => {
-    if (!item.synced) {
-      setSelectionMode(false);
-      setSelectedIds([]);
-      navigation.navigate("EditData", {
-        data: item,
-        onGoBack: fetchData,
-        selectedDate: date.toISOString(),
-      });
-    } else {
-      Alert.alert("Gagal Edit", "Data yang sudah tersinkron tidak dapat diedit.");
-    }
-  };
-
-  // ==========================
-  // 8️⃣ Delete Selected Items
-  // ==========================
-  const handleDeleteSelected = () => {
-    if (!selectedIds.length) return;
-
-    Alert.alert(
-      "Hapus Data",
-      `Anda yakin ingin menghapus ${selectedIds.length} data harga yang belum tersinkron ini?`,
-      [
-        { text: "Batal", style: "cancel" },
-        {
-          text: "Hapus",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              for (const id of selectedIds) {
-                await deleteLocalPrice(id);
-              }
-              setSelectionMode(false);
-              setSelectedIds([]);
-              fetchData();
-            } catch (error) {
-              console.error("Delete failed:", error);
-              Alert.alert("Error Hapus", "Gagal menghapus data.");
-            }
-          },
-        },
-      ]
+  // --- LOGIKA SELEKSI HAPUS ---
+  const toggleSelect = (item) => {
+    if (item.is_synced) return; // Proteksi: Data tersinkron tidak bisa dipilih
+    setSelectedIds(prev => 
+      prev.includes(item.id) ? prev.filter(i => i !== item.id) : [...prev, item.id]
     );
   };
 
-  // ==========================
-  // 9️⃣ Render Helpers
-  // ==========================
-  const renderImage = (item) => {
-    const uri = item.local_image || item.image;
-    if (uri) return <Image source={{ uri }} style={styles.image} />;
-    return (
-      <View style={styles.image}>
-        <Ionicons name="image-outline" size={30} color="#9CA3AF" />
-      </View>
-    );
+  const handleDelete = () => {
+    if (selectedIds.length === 0) return;
+    Alert.alert("Hapus Data", `Hapus ${selectedIds.length} data lokal terpilih?`, [
+      { text: "Batal", style: "cancel" },
+      { 
+        text: "Hapus", 
+        style: "destructive", 
+        onPress: async () => {
+          try {
+            for (const id of selectedIds) { await deleteLocalPrice(id); }
+            setSelectedIds([]);
+            setSelectionMode(false);
+            fetchData();
+          } catch (err) {
+            Alert.alert("Error", "Gagal menghapus data.");
+          }
+        }
+      }
+    ]);
   };
 
-  const handleGoBack = () => {
-    if (selectionMode) {
-      setSelectionMode(false);
-      setSelectedIds([]);
-    } else navigation.goBack();
-  };
-
-  // ==========================
-  // 🔹 RENDER JSX
-  // ==========================
   return (
     <View style={styles.container}>
-      {/* HEADER BAR */}
-      <View style={styles.header}>
+      {/* HEADER DENGAN MODE SELEKSI */}
+      <View style={[styles.header, selectionMode && styles.headerSelection]}>
         {selectionMode ? (
           <>
-            <TouchableOpacity onPress={handleGoBack}>
-              <Ionicons name="close" size={24} color="#fff" />
+            <TouchableOpacity onPress={() => { setSelectionMode(false); setSelectedIds([]); }}>
+              <Ionicons name="close" size={26} color="#fff" />
             </TouchableOpacity>
-
-            <Text style={styles.headerTitle}>{selectedIds.length} dipilih</Text>
-
-            <TouchableOpacity onPress={handleDeleteSelected} disabled={!selectedIds.length}>
-              <Ionicons
-                name="trash"
-                size={22}
-                color={selectedIds.length ? "#fff" : "#9CA3AF"}
-              />
+            <Text style={styles.headerTitleSelection}>{selectedIds.length} Terpilih</Text>
+            <TouchableOpacity onPress={handleDelete}>
+              <Ionicons name="trash" size={24} color="#fff" />
             </TouchableOpacity>
           </>
         ) : (
           <>
-            <TouchableOpacity onPress={handleGoBack}>
-              <Ionicons name="arrow-back" size={24} color="#fff" />
+            <TouchableOpacity onPress={() => navigation.goBack()}>
+              <Ionicons name="arrow-back" size={26} color="#fff" />
             </TouchableOpacity>
-            <Text style={styles.headerTitle}>{nama_komoditas}</Text>
+            <Text style={styles.headerTitle}>Detail Harga</Text>
           </>
         )}
       </View>
 
-      <ScrollView style={styles.content}>
-        {/* INFO KOMODITAS & DATE PICKER */}
-        <View style={styles.infoHeader}>
-          <Text style={styles.title}>{nama_komoditas || "Komoditas Tidak Dikenal"}</Text>
-          <Text style={styles.subtitle}>
-            {kategori || "-"} | {satuan || "-"}
-          </Text>
-
-          <View style={styles.infoBoxRow}>
-            <View style={styles.infoBox}>
-              <Text style={styles.avg}>Rata-rata: Rp {headerAvg.toLocaleString("id-ID")}</Text>
-              <Text style={styles.totalData}>Total data: {filteredItems.length}</Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.dateBox}
-              onPress={() => setShowPicker(true)}
-              disabled={loading}
-            >
-              <Ionicons name="calendar-outline" size={16} color="#174A6A" />
-              <Text style={styles.dateBoxText}>{formatTanggalHeader(date)}</Text>
-            </TouchableOpacity>
+      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        {/* INFO KOMODITAS & RINGKASAN */}
+        <View style={styles.summaryBox}>
+          <Text style={styles.commodityLabel}>{nama_komoditas}</Text>
+          <Text style={styles.avgLabel}>RATA-RATA HARGA</Text>
+          <Text style={styles.avgValue}>Rp {headerStats.avg.toLocaleString("id-ID")}</Text>
+          <View style={styles.countBadge}>
+            <Ionicons name="stats-chart" size={12} color="#174A6A" />
+            <Text style={styles.countText}> {headerStats.count} Total Inputan (Gabungan)</Text>
           </View>
-
-          {showPicker && (
-            <DateTimePicker
-              value={date}
-              mode="date"
-              display={Platform.OS === "ios" ? "spinner" : "default"}
-              maximumDate={new Date()}
-              minimumDate={get30DaysAgo()}
-              onChange={handleDateChange}
-            />
-          )}
         </View>
 
-        {/* LIST DATA */}
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Butiran Input Lokal</Text>
+          <Text style={styles.dateInfo}>{getLocalYMD(date)}</Text>
+        </View>
+
         {loading ? (
-          <ActivityIndicator size="large" color="#174A6A" style={{ marginTop: 40 }} />
-        ) : filteredItems.length ? (
-          filteredItems.map((item) => {
-            const idKey = item.id || item.local_id;
-            const selected = selectedIds.includes(idKey);
-            const displayDate = new Date(getItemDate(item));
-            const isSynced = !!item.synced;
+          <ActivityIndicator color="#174A6A" size="large" style={{ marginTop: 40 }} />
+        ) : localEntries.length > 0 ? (
+          localEntries.map((item) => {
+            const isSelected = selectedIds.includes(item.id);
+            const isSynced = item.is_synced;
 
             return (
-              <TouchableOpacity
-                key={idKey}
+              <TouchableOpacity 
+                key={item.id} 
+                activeOpacity={isSynced ? 1 : 0.7}
+                onLongPress={() => !isSynced && (setSelectionMode(true), toggleSelect(item))}
+                onPress={() => selectionMode ? toggleSelect(item) : null}
                 style={[
                   styles.card,
-                  selected && { borderWidth: 2, borderColor: "#2563EB" },
-                  selectionMode && isSynced && { opacity: 0.6 },
+                  isSelected && styles.cardSelected,
+                  isSynced && styles.cardSynced // Visual untuk data terkunci
                 ]}
-                onLongPress={() => handleLongPressItem(item)}
-                onPress={() => handlePressItem(item)}
-                disabled={selectionMode && isSynced}
               >
-                {selectionMode && !isSynced && (
-                  <View style={[styles.checkbox, selected && styles.checked]}>
-                    {selected && <Ionicons name="checkmark" size={16} color="#fff" />}
-                  </View>
-                )}
-
-                <View style={{ marginRight: 12 }}>{renderImage(item)}</View>
-
-                <View style={styles.info}>
-                  <Text style={styles.price}>
-                    Rp {getItemPrice(item).toLocaleString("id-ID")} / {satuan}
-                  </Text>
-
-                  <Text style={styles.date}>
-                    {displayDate.toLocaleDateString("id-ID", {
-                      day: "numeric",
-                      month: "short",
-                      year: "numeric",
-                    })}{" "}
-                    -{" "}
-                    {displayDate.toLocaleTimeString("id-ID", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </Text>
-
-                  {item.updated_at && (
-                    <Text style={{ fontSize: 11, color: "#9CA3AF" }}>(Diperbarui)</Text>
+                <View style={styles.cardMain}>
+                  {selectionMode && !isSynced && (
+                    <View style={[styles.checkbox, isSelected && styles.checkboxActive]}>
+                      {isSelected && <Ionicons name="checkmark" size={14} color="#fff" />}
+                    </View>
                   )}
+                  
+                  {isSynced && <Ionicons name="lock-closed" size={16} color="#94A3B8" style={{marginRight: 8}} />}
+
+                  <Image 
+                    source={item.local_image ? { uri: item.local_image } : null} 
+                    style={styles.imgThumbnail} 
+                  />
+                  
+                  <View>
+                    <Text style={styles.priceText}>Rp {item.harga_angka.toLocaleString("id-ID")}</Text>
+                    <Text style={styles.timeText}>
+                      {new Date(item.waktu).toLocaleTimeString("id-ID", { hour: '2-digit', minute: '2-digit' })} WIB
+                    </Text>
+                  </View>
                 </View>
 
-                {!selectionMode && (
-                  <>
-                    <View style={{ alignItems: "flex-end", marginLeft: 8 }}>
-                      <Text
-                        style={[styles.status, { color: isSynced ? "#16A34A" : "#DC2626" }]}
-                      >
-                        {isSynced ? "Tersinkron" : "Belum Tersinkron"}
-                      </Text>
-                    </View>
-
-                    {!isSynced && (
-                      <TouchableOpacity onPress={() => handleEdit(item)} style={{ marginLeft: 12 }}>
-                        <Ionicons name="pencil" size={20} color="#2563EB" />
-                      </TouchableOpacity>
-                    )}
-                  </>
-                )}
+                <View style={styles.cardRight}>
+                  <View style={[styles.statusBadge, { backgroundColor: isSynced ? "#DCFCE7" : "#FEE2E2" }]}>
+                    <Text style={[styles.statusText, { color: isSynced ? "#16A34A" : "#DC2626" }]}>
+                      {isSynced ? "TERSINKRON" : "LOKAL"}
+                    </Text>
+                  </View>
+                  
+                  {!isSynced && !selectionMode && (
+                    <TouchableOpacity 
+                      onPress={() => navigation.navigate("EditData", { data: item })}
+                      style={styles.editBtn}
+                    >
+                      <Ionicons name="pencil" size={12} color="#2563EB" />
+                      <Text style={styles.editText}>Edit</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               </TouchableOpacity>
             );
           })
         ) : (
-          <Text style={styles.empty}>Belum ada data di tanggal ini.</Text>
+          <View style={styles.emptyContainer}>
+            <Ionicons name="newspaper-outline" size={60} color="#D1D5DB" />
+            <Text style={styles.emptyText}>Tidak ada history input lokal untuk tanggal ini.</Text>
+          </View>
         )}
-        <View style={{ height: 40 }} />
+        <View style={{ height: 100 }} />
       </ScrollView>
+
+      {/* FAB KALENDER */}
+      <TouchableOpacity style={styles.fab} onPress={() => setShowPicker(true)}>
+        <Ionicons name="calendar" size={26} color="#fff" />
+      </TouchableOpacity>
+
+      {showPicker && (
+        <DateTimePicker
+          value={date}
+          mode="date"
+          display="default"
+          maximumDate={new Date()}
+          onChange={(e, d) => { setShowPicker(false); if(d) setDate(d); }}
+        />
+      )}
     </View>
   );
 }
 
-// ==============================
-// 📌 STYLES
-// ==============================
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F9FAFB" },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#174A6A",
-    paddingTop: 50,
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#fff",
-    flex: 1,
-    marginLeft: 12,
-  },
-  content: { flex: 1, padding: 16 },
-  infoHeader: { marginBottom: 16 },
-  title: { fontSize: 20, fontWeight: "700", color: "#111827" },
-  subtitle: { fontSize: 14, color: "#6B7280", marginTop: 4 },
-  infoBoxRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 8,
-    marginBottom: 12,
-  },
-  infoBox: {
-    flex: 1,
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 12,
-    marginRight: 8,
-  },
-  avg: { fontSize: 16, fontWeight: "700", color: "#174A6A" },
-  totalData: { fontSize: 14, fontWeight: "600", color: "#111827" },
-  dateBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#E0F2FE",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-  },
-  dateBoxText: {
-    marginLeft: 6,
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#174A6A",
-  },
-  card: {
-    flexDirection: "row",
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 12,
-    marginVertical: 8,
-    alignItems: "center",
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.41,
-  },
-  checkbox: {
-    width: 24,
-    height: 24,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: "#6B7280",
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 8,
-  },
-  checked: { backgroundColor: "#16A34A", borderColor: "#16A34A" },
-  image: {
-    width: 64,
-    height: 64,
-    borderRadius: 10,
-    backgroundColor: "#EEE",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  info: { flex: 1 },
-  price: { fontSize: 14, fontWeight: "700", color: "#174A6A" },
-  date: { fontSize: 12, color: "#6B7280", marginTop: 4 },
-  status: { fontSize: 12, fontWeight: "700" },
-  empty: { textAlign: "center", marginTop: 40, color: "#6B7280" },
+  container: { flex: 1, backgroundColor: "#F8FAFC" },
+  header: { backgroundColor: "#174A6A", paddingTop: 50, paddingBottom: 15, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center' },
+  headerSelection: { backgroundColor: "#EF4444" },
+  headerTitle: { color: "#fff", fontSize: 19, fontWeight: "800", marginLeft: 15 },
+  headerTitleSelection: { color: "#fff", fontSize: 19, fontWeight: "800", flex: 1, marginLeft: 15 },
+  content: { padding: 16 },
+  summaryBox: { backgroundColor: "#fff", borderRadius: 20, padding: 20, alignItems: 'center', elevation: 5, marginBottom: 25, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+  commodityLabel: { fontSize: 14, color: "#64748B", fontWeight: '700', marginBottom: 10 },
+  avgLabel: { color: "#94A3B8", fontSize: 10, fontWeight: '800', letterSpacing: 1.5 },
+  avgValue: { fontSize: 36, fontWeight: "900", color: "#174A6A", marginVertical: 4 },
+  countBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0F9FF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, marginTop: 5 },
+  countText: { color: "#174A6A", fontSize: 12, fontWeight: '700' },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, paddingHorizontal: 5 },
+  sectionTitle: { fontSize: 15, fontWeight: "800", color: "#334155" },
+  dateInfo: { fontSize: 12, color: "#94A3B8", fontWeight: '600' },
+  card: { backgroundColor: "#fff", borderRadius: 15, padding: 14, marginBottom: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', elevation: 2 },
+  cardSelected: { backgroundColor: "#FEF2F2", borderColor: "#EF4444", borderWidth: 1 },
+  cardSynced: { backgroundColor: "#F1F5F9", opacity: 0.8 },
+  cardMain: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: '#CBD5E1', marginRight: 12, justifyContent: 'center', alignItems: 'center' },
+  checkboxActive: { backgroundColor: '#EF4444', borderColor: '#EF4444' },
+  imgThumbnail: { width: 50, height: 50, borderRadius: 12, backgroundColor: '#F1F5F9', marginRight: 12 },
+  priceText: { fontSize: 17, fontWeight: "800", color: "#1E293B" },
+  timeText: { fontSize: 12, color: "#64748B", marginTop: 2 },
+  cardRight: { alignItems: 'flex-end' },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  statusText: { fontSize: 9, fontWeight: "900", letterSpacing: 0.5 },
+  editBtn: { flexDirection: 'row', alignItems: 'center', marginTop: 10, backgroundColor: '#EFF6FF', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
+  editText: { color: '#2563EB', fontSize: 11, fontWeight: '800', marginLeft: 4 },
+  fab: { position: 'absolute', right: 25, bottom: 30, backgroundColor: '#174A6A', width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', elevation: 8, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 5 },
+  emptyContainer: { alignItems: 'center', marginTop: 60 },
+  emptyText: { color: "#94A3B8", fontSize: 14, textAlign: 'center', marginTop: 15, width: '80%' }
 });

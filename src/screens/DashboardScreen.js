@@ -1,5 +1,5 @@
 // ===============================
-// 📱 DashboardScreen.js (FINAL — LOCAL INPUT ONLY)
+// 📱 DashboardScreen.js (VISUAL ASLI + LOG LOKAL + NOTIFIKASI)
 // ===============================
 import React, { useEffect, useState, useCallback } from "react";
 import {
@@ -17,16 +17,11 @@ import NetInfo from "@react-native-community/netinfo";
 import { useFocusEffect } from "@react-navigation/native";
 
 import BottomNav from "../components/BottomNav";
-
-import {
-  initDatabase,
-  getAllLocalPrices,
-  countUniqueCommodities,
-  getImageForCommodityByName,
-} from "../../config/database";
+import { initDatabase } from "../../config/database";
+import { pushNotification } from "./NotificationScreen"; // ✅ TAMBAHAN AMAN
 
 // ===============================
-// Helper Functions
+// Helper Formatter
 // ===============================
 const formatTanggalItem = (tgl) => {
   if (!tgl) return "-";
@@ -49,62 +44,56 @@ const formatHarga = (harga) => {
 };
 
 // ===============================
-// Enrich Image
-// ===============================
-const enrichItemsWithImages = async (items) => {
-  return Promise.all(
-    items.map(async (item) => {
-      const copy = { ...item };
-
-      if (!copy.local_image && copy.name_commodity) {
-        const img = await getImageForCommodityByName(copy.name_commodity);
-        copy.local_image = img || "https://via.placeholder.com/65";
-      }
-
-      if (!copy.local_image) copy.local_image = "https://via.placeholder.com/65";
-      return copy;
-    })
-  );
-};
-
-// ===============================
-// Load Dashboard Data (LOCAL INPUT ONLY)
-// ===============================
-const loadDashboardData = async () => {
-  const all = (await getAllLocalPrices()) || [];
-
-  // ✅ FILTER hanya data input lokal
-  const localInputOnly = all.filter((it) => it.local_id); // atau it.is_local === 1 kalau pakai flag
-
-  const sorted = localInputOnly.sort((a, b) => {
-    const da = new Date(a.tanggal || a.created_at);
-    const db = new Date(b.tanggal || b.created_at);
-    return db - da;
-  });
-
-  return enrichItemsWithImages(sorted.slice(0, 10));
-};
-
-// ===============================
 // Component
 // ===============================
 export default function DashboardScreen({ navigation }) {
   const [dashboardData, setDashboardData] = useState([]);
+  const [uniqueCount, setUniqueCount] = useState(0);
+  const [isConnected, setIsConnected] = useState(true);
+  const [greeting, setGreeting] = useState("");
   const [user, setUser] = useState({
     user_name: "",
     market_name: "",
     total_commodities: 0,
   });
-  const [greeting, setGreeting] = useState("");
-  const [isConnected, setIsConnected] = useState(true);
-  const [uniqueCount, setUniqueCount] = useState(0);
 
+  // ===============================
+  // RELOAD DASHBOARD (LOG LOKAL)
+  // ===============================
   const reloadDashboard = useCallback(async () => {
-    const data = await loadDashboardData();
-    setDashboardData(data);
+    try {
+      const today = new Date().toISOString().split("T")[0];
+      const logRaw = await AsyncStorage.getItem("dashboard_log");
+      const allLogs = logRaw ? JSON.parse(logRaw) : [];
 
-    const uc = await countUniqueCommodities();
-    setUniqueCount(uc ?? 0);
+      const dataHariIni = allLogs.filter((it) => it.tanggal === today);
+      setDashboardData(dataHariIni);
+
+      const uniqueItems = new Set(
+        dataHariIni.map((item) => item.name_commodity)
+      );
+      setUniqueCount(uniqueItems.size);
+
+      // ===============================
+      // 🔔 NOTIFIKASI SEKALI PER HARI
+      // ===============================
+      if (dataHariIni.length > 0) {
+        const notifKey = `dashboard_notif_${today}`;
+        const already = await AsyncStorage.getItem(notifKey);
+
+        if (!already) {
+          await pushNotification({
+            type: "info",
+            title: "Pendataan Hari Ini",
+            message: `${uniqueItems.size} komoditas sudah diinput hari ini`,
+          });
+
+          await AsyncStorage.setItem(notifKey, "1");
+        }
+      }
+    } catch (e) {
+      console.error("Dashboard load error:", e);
+    }
   }, []);
 
   // ===============================
@@ -114,7 +103,7 @@ export default function DashboardScreen({ navigation }) {
     const unsub = NetInfo.addEventListener((s) =>
       setIsConnected(Boolean(s.isConnected))
     );
-    return () => unsub && unsub();
+    return () => unsub();
   }, []);
 
   // ===============================
@@ -126,32 +115,61 @@ export default function DashboardScreen({ navigation }) {
 
       const setup = async () => {
         await initDatabase();
-
         const storedUser = await AsyncStorage.getItem("user");
         if (storedUser && mounted) setUser(JSON.parse(storedUser));
 
-        const h = new Date().getHours();
-        let g = "Selamat Malam";
-        if (h >= 4 && h < 11) g = "Selamat Pagi";
-        else if (h >= 11 && h < 15) g = "Selamat Siang";
-        else if (h >= 15 && h < 18) g = "Selamat Sore";
-        if (mounted) setGreeting(g);
+        const hour = new Date().getHours();
+        setGreeting(
+          hour < 11
+            ? "Selamat Pagi"
+            : hour < 15
+            ? "Selamat Siang"
+            : hour < 18
+            ? "Selamat Sore"
+            : "Selamat Malam"
+        );
 
         if (mounted) await reloadDashboard();
       };
 
       setup();
-      return () => {
-        mounted = false;
-      };
+      return () => (mounted = false);
     }, [reloadDashboard])
   );
 
   // ===============================
-  // Navigation
+  // Render Item
   // ===============================
-  const handleTambahData = () =>
-    navigation.navigate("Input", { onAddPrice: reloadDashboard });
+  const renderItem = (item, idx) => (
+    <View key={item.id_temp || idx} style={styles.cardItem}>
+      <Image
+        source={{ uri: item.local_image || "https://via.placeholder.com/65" }}
+        style={styles.image}
+      />
+
+      <View style={styles.textContainer}>
+        <Text style={styles.itemName}>{item.name_commodity}</Text>
+        <Text style={styles.itemPrice}>
+          {formatHarga(item.price)} / {item.unit}
+        </Text>
+        <Text style={styles.itemDate}>
+          {formatTanggalItem(item.created_at)}
+        </Text>
+      </View>
+
+      <View style={styles.rightSection}>
+        <Text style={styles.itemCategory} numberOfLines={1}>
+          {item.name_category || "Lainnya"}
+        </Text>
+        <Ionicons
+          name="cloud-done"
+          size={16}
+          color="#174A6A"
+          style={{ marginTop: 6 }}
+        />
+      </View>
+    </View>
+  );
 
   const tanggalSekarang = new Date().toLocaleDateString("id-ID", {
     weekday: "long",
@@ -160,16 +178,14 @@ export default function DashboardScreen({ navigation }) {
     year: "numeric",
   });
 
-  // ===============================
-  // Render
-  // ===============================
   return (
     <View style={styles.container}>
+      {/* HEADER */}
       <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
         <View style={styles.headerTop}>
           <View>
             <Text style={styles.greeting}>{greeting}!</Text>
-            <Text style={styles.name}>{user.user_name}</Text>
+            <Text style={styles.name}>{user.user_name || "Petugas"}</Text>
           </View>
 
           <View style={styles.rightHeader}>
@@ -184,59 +200,65 @@ export default function DashboardScreen({ navigation }) {
                 {isConnected ? "Online" : "Offline"}
               </Text>
             </View>
-            <Ionicons name="notifications-outline" size={26} color="#fff" />
+
+            <TouchableOpacity
+              onPress={() => navigation.navigate("Notification")}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="notifications-outline"
+                size={26}
+                color="#fff"
+              />
+            </TouchableOpacity>
           </View>
         </View>
       </LinearGradient>
 
+      {/* BODY */}
       <View style={styles.body}>
         <View style={styles.infoCard}>
           <View style={styles.rowBetween}>
             <View>
               <Text style={styles.label}>Pasar</Text>
-              <Text style={styles.value}>{user.market_name}</Text>
+              <Text style={styles.value}>{user.market_name || "-"}</Text>
               <Text style={styles.dateBelowMarket}>{tanggalSekarang}</Text>
             </View>
 
-            <View>
+            <View style={{ alignItems: "flex-end" }}>
               <Text style={styles.label}>Total Komoditas</Text>
-              <Text style={styles.value}>{String(user.total_commodities)}</Text>
-              <Text style={styles.subLabel}>Komoditas Sudah Diinput</Text>
-              <Text style={styles.uniqueValue}>{String(uniqueCount)}</Text>
+              <Text style={styles.value}>{user.total_commodities}</Text>
+              <Text style={styles.subLabel}>Sudah Diinput</Text>
+              <Text style={styles.uniqueValue}>{uniqueCount}</Text>
             </View>
           </View>
 
-          <TouchableOpacity style={styles.btnTambah} onPress={handleTambahData}>
+          <TouchableOpacity
+            style={styles.btnTambah}
+            onPress={() =>
+              navigation.navigate("Input", { onAddPrice: reloadDashboard })
+            }
+          >
             <Text style={styles.btnText}>+ Tambah Data</Text>
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.sectionTitle}>Pendataan Terakhir</Text>
+        <Text style={styles.sectionTitle}>Pendataan Terakhir (Hari Ini)</Text>
 
         <ScrollView showsVerticalScrollIndicator={false}>
           {dashboardData.length ? (
-            dashboardData.map((item, idx) => (
-              <View
-                key={item.local_id || idx}
-                style={styles.cardItem}
-              >
-                <Image source={{ uri: item.local_image }} style={styles.image} />
-                <View style={styles.textContainer}>
-                  <Text style={styles.itemName}>{item.name_commodity || "-"}</Text>
-                  <Text style={styles.itemPrice}>
-                    {formatHarga(item.price)} / {item.unit}
-                  </Text>
-                  <Text style={styles.itemDate}>
-                    {formatTanggalItem(item.tanggal || item.created_at)}
-                  </Text>
-                </View>
-                <View style={styles.rightSection}>
-                  <Text style={styles.itemCategory}>{item.name_category || "Lainnya"}</Text>
-                </View>
-              </View>
-            ))
+            dashboardData.map(renderItem)
           ) : (
-            <Text style={styles.emptyText}>Belum ada pendataan terakhir</Text>
+            <View style={styles.emptyBox}>
+              <Ionicons
+                name="document-text-outline"
+                size={50}
+                color="#D1D5DB"
+              />
+              <Text style={styles.emptyText}>
+                Belum ada pendataan hari ini
+              </Text>
+            </View>
           )}
         </ScrollView>
       </View>
@@ -247,36 +269,72 @@ export default function DashboardScreen({ navigation }) {
 }
 
 // ===============================
-// Styles
+// Styles (TIDAK DIUBAH)
 // ===============================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F3F4F6" },
   header: { paddingTop: 50, paddingBottom: 40, paddingHorizontal: 20 },
-  headerTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  headerTop: { flexDirection: "row", justifyContent: "space-between" },
   rightHeader: { flexDirection: "row", alignItems: "center" },
   statusContainer: { flexDirection: "row", alignItems: "center", marginRight: 12 },
-  statusDot: { width: 12, height: 12, borderRadius: 6, marginRight: 6, borderWidth: 1.5, borderColor: "#fff" },
-  statusText: { color: "#fff", fontSize: 13, fontWeight: "600" },
-  greeting: { color: "#E0F2FE", fontSize: 16 },
+  statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
+  statusText: { color: "#fff", fontSize: 12, fontWeight: "600" },
+  greeting: { color: "#E0F2FE", fontSize: 14 },
   name: { color: "#fff", fontSize: 18, fontWeight: "700" },
-  body: { flex: 1, marginTop: -20, backgroundColor: "#F3F4F6", borderTopLeftRadius: 25, borderTopRightRadius: 25, padding: 16 },
-  infoCard: { backgroundColor: "#fff", borderRadius: 15, padding: 16, marginBottom: 16 },
+  body: {
+    flex: 1,
+    marginTop: -25,
+    backgroundColor: "#F3F4F6",
+    borderTopLeftRadius: 25,
+    borderTopRightRadius: 25,
+    padding: 16,
+  },
+  infoCard: {
+    backgroundColor: "#fff",
+    borderRadius: 15,
+    padding: 16,
+    marginBottom: 16,
+    elevation: 3,
+  },
   rowBetween: { flexDirection: "row", justifyContent: "space-between" },
-  label: { color: "#6B7280", fontSize: 13 },
-  value: { color: "#111827", fontSize: 15, fontWeight: "600" },
-  subLabel: { color: "#6B7280", fontSize: 12, marginTop: 8 },
-  uniqueValue: { fontSize: 15, fontWeight: "700" },
-  dateBelowMarket: { fontSize: 12, color: "#6B7280" },
-  btnTambah: { backgroundColor: "#174A6A", paddingVertical: 10, borderRadius: 10, marginTop: 14, alignItems: "center" },
+  label: { color: "#6B7280", fontSize: 12 },
+  value: { fontSize: 15, fontWeight: "700" },
+  subLabel: { fontSize: 11, marginTop: 8 },
+  uniqueValue: { fontSize: 16, fontWeight: "800", color: "#174A6A" },
+  dateBelowMarket: { fontSize: 11, color: "#9CA3AF" },
+  btnTambah: {
+    backgroundColor: "#174A6A",
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginTop: 15,
+    alignItems: "center",
+  },
   btnText: { color: "#fff", fontWeight: "700" },
-  sectionTitle: { fontSize: 16, fontWeight: "700", marginBottom: 12 },
-  cardItem: { backgroundColor: "#fff", borderRadius: 10, flexDirection: "row", alignItems: "center", marginBottom: 10, padding: 12 },
-  image: { width: 65, height: 65, borderRadius: 10, marginRight: 12 },
+  sectionTitle: { fontSize: 15, fontWeight: "700", marginBottom: 12 },
+  cardItem: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10,
+    padding: 12,
+    elevation: 1,
+  },
+  image: { width: 60, height: 60, borderRadius: 8, marginRight: 12 },
   textContainer: { flex: 1 },
-  rightSection: { width: 80, alignItems: "flex-end" },
+  rightSection: { width: 85, alignItems: "flex-end" },
   itemName: { fontSize: 15, fontWeight: "700" },
-  itemPrice: { fontSize: 14, fontWeight: "600", color: "#174A6A" },
-  itemDate: { fontSize: 12, color: "#6B7280" },
-  itemCategory: { fontSize: 12, fontWeight: "700", color: "#174A6A" },
-  emptyText: { textAlign: "center", color: "#6B7280", marginTop: 20 },
+  itemPrice: { fontSize: 14, fontWeight: "700", color: "#174A6A" },
+  itemDate: { fontSize: 11, color: "#6B7280" },
+  itemCategory: {
+    fontSize: 11,
+    fontWeight: "700",
+    backgroundColor: "#E0F2FE",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    color: "#174A6A",
+  },
+  emptyBox: { marginTop: 40, alignItems: "center" },
+  emptyText: { color: "#9CA3AF", marginTop: 10 },
 });

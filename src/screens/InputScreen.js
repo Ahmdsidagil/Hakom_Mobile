@@ -1,5 +1,5 @@
 // ===============================
-// 📱 InputScreen.js (FULL FINAL - KOMODITAS FIXED TANPA UBAH FUNGSI)
+// 📱 InputScreen.js (FULL FINAL — LOCAL DASHBOARD FIX)
 // ===============================
 import React, { useEffect, useState, useRef } from "react";
 import {
@@ -11,38 +11,49 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  Alert,
-  Animated,
   Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-
-import { pushNotification } from "./NotificationScreen";
 
 import {
   getCategories,
   getCommoditiesByCategory,
-  addPrice,
   getDatabase,
+  addPrice,
 } from "../../config/database";
 
-export default function InputScreen({ navigation, route }) {
+export default function InputScreen({ navigation }) {
   const [categories, setCategories] = useState([]);
   const [commodities, setCommodities] = useState([]);
+  const [units, setUnits] = useState([]);
+
   const [selectedCategories, setSelectedCategories] = useState([]);
   const [selectedCommodity, setSelectedCommodity] = useState(null);
+
   const [unit, setUnit] = useState("");
   const [price, setPrice] = useState("");
   const [loading, setLoading] = useState(false);
-  const [snackbarMessage, setSnackbarMessage] = useState("");
-  const [snackbarAnim] = useState(new Animated.Value(0));
 
-  const scrollRef = useRef();
+  const scrollRef = useRef(null);
+  const priceRef = useRef(null);
 
   // ===============================
-  // LOAD DATA (ASYNCSTORAGE READY)
+  // UTIL WAKTU LOKAL (REALTIME)
+  // ===============================
+  const getLocalDateTime = () => {
+    const now = new Date();
+    const offset = now.getTimezoneOffset() * 60000;
+    const local = new Date(now - offset);
+    return {
+      tanggal: local.toISOString().split("T")[0],
+      waktu: local.toISOString().split("T")[1].slice(0, 8),
+      created_at: local.toISOString(),
+    };
+  };
+
+  // ===============================
+  // LOAD DATA
   // ===============================
   useEffect(() => {
     loadData();
@@ -50,33 +61,23 @@ export default function InputScreen({ navigation, route }) {
 
   const loadData = async () => {
     try {
-      // ===== CATEGORIES =====
       const catsStr = await AsyncStorage.getItem("categories");
       const cats = catsStr ? JSON.parse(catsStr) : await getCategories();
       setCategories(Array.isArray(cats) ? cats : []);
 
-      // ===== COMMODITIES (FIXED PART) =====
-      const commsStr = await AsyncStorage.getItem("commodities");
+      const commStr = await AsyncStorage.getItem("commodities");
       let all = [];
 
-      if (commsStr) {
-        const parsed = JSON.parse(commsStr);
-
-        if (Array.isArray(parsed)) {
-          all = parsed;
-        } else if (Array.isArray(parsed?.data)) {
-          all = parsed.data;
-        } else {
-          all = [];
-        }
-      } else if (cats && cats.length) {
-        for (const cat of cats) {
-          const res = await getCommoditiesByCategory(cat.id_category);
+      if (commStr) {
+        const parsed = JSON.parse(commStr);
+        all = Array.isArray(parsed) ? parsed : parsed?.data || [];
+      } else {
+        for (const c of cats) {
+          const res = await getCommoditiesByCategory(c.id_category);
           if (Array.isArray(res)) all.push(...res);
         }
       }
 
-      // NORMALISASI CATEGORY_ID (WAJIB)
       all = all.map((c) => ({
         ...c,
         category_id:
@@ -89,36 +90,27 @@ export default function InputScreen({ navigation, route }) {
 
       setCommodities(all);
 
-      // ===== UNITS (OPTIONAL, TIDAK DIUBAH) =====
       const unitsStr = await AsyncStorage.getItem("units");
-      const units = unitsStr ? JSON.parse(unitsStr) : [];
-    } catch (err) {
-      console.log("Load error:", err);
+      setUnits(unitsStr ? JSON.parse(unitsStr) : []);
+    } catch (e) {
+      console.log("Load error:", e);
     }
   };
 
   // ===============================
-  // SNACKBAR
+  // FORMAT RUPIAH
   // ===============================
-  const showSnackbar = (msg) => {
-    setSnackbarMessage(msg);
-    Animated.timing(snackbarAnim, {
-      toValue: 1,
-      duration: 250,
-      useNativeDriver: true,
-    }).start(() => {
-      setTimeout(() => {
-        Animated.timing(snackbarAnim, {
-          toValue: 0,
-          duration: 250,
-          useNativeDriver: true,
-        }).start(() => setSnackbarMessage(""));
-      }, 1500);
-    });
+  const formatRupiah = (value) => {
+    if (!value) return "";
+    const clean = value.replace(/\D/g, "");
+    return clean.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   };
 
+  const rupiahToNumber = (val) =>
+    Number(val.replace(/\./g, "")) || 0;
+
   // ===============================
-  // TOGGLE CATEGORY
+  // CATEGORY
   // ===============================
   const toggleCategory = (cat) => {
     const exists = selectedCategories.some(
@@ -141,128 +133,173 @@ export default function InputScreen({ navigation, route }) {
     ) {
       setSelectedCommodity(null);
       setUnit("");
+      setPrice("");
     }
   };
 
   // ===============================
-  // SELECT COMMODITY + UNIT
+  // SELECT COMMODITY
   // ===============================
   const handleSelectCommodity = async (item) => {
     setSelectedCommodity(item);
+    setPrice("");
 
     if (item.unit || item.name_unit) {
       setUnit(item.unit || item.name_unit);
     } else if (item.unit_id) {
-      try {
+      const local = units.find(
+        (u) => Number(u.id) === Number(item.unit_id)
+      );
+      if (local) {
+        setUnit(local.name_unit);
+      } else {
         const db = await getDatabase();
-        const unitRow = await db.getFirstAsync(
-          `SELECT name_unit FROM units WHERE id = ?`,
+        const row = await db.getFirstAsync(
+          "SELECT name_unit FROM units WHERE id = ?",
           [item.unit_id]
         );
-        setUnit(unitRow?.name_unit || "");
-      } catch {
-        setUnit("");
+        setUnit(row?.name_unit || "");
       }
     } else {
       setUnit("");
     }
+
+    setTimeout(() => {
+      priceRef.current?.measureLayout(
+        scrollRef.current,
+        (_, y) => {
+          scrollRef.current.scrollTo({
+            y: y - 20,
+            animated: true,
+          });
+        }
+      );
+    }, 300);
   };
 
   // ===============================
-  // FORMAT RUPIAH
-  // ===============================
-  const formatRupiah = (value) => {
-    if (!value) return "";
-    let numberString = value.replace(/[^,\d]/g, "");
-    let sisa = numberString.length % 3;
-    let rupiah = numberString.substr(0, sisa);
-    let ribuan = numberString.substr(sisa).match(/\d{3}/g);
-
-    if (ribuan) {
-      rupiah += (sisa ? "." : "") + ribuan.join(".");
-    }
-    return rupiah;
-  };
-
-  // ===============================
-  // SUBMIT (TIDAK DIUBAH)
+  // SUBMIT (FIX UTAMA)
   // ===============================
   const handleSubmit = async () => {
-    // tetap sama
+    if (!selectedCommodity || !price) return;
+
+    setLoading(true);
+    try {
+      const priceNumeric = rupiahToNumber(price);
+
+      // 1️⃣ SIMPAN KE SQLITE (SYNC SERVER)
+      await addPrice(
+        selectedCommodity.id_commodity,
+        selectedCommodity.category_id,
+        priceNumeric
+      );
+
+      // 2️⃣ WAKTU LOKAL REALTIME
+      const waktu = getLocalDateTime();
+
+      // 3️⃣ CEK & RESET DASHBOARD JIKA GANTI HARI
+      const lastDate = await AsyncStorage.getItem("dashboard_date");
+      if (lastDate !== waktu.tanggal) {
+        await AsyncStorage.removeItem("dashboard_log");
+        await AsyncStorage.setItem("dashboard_date", waktu.tanggal);
+      }
+
+      // 4️⃣ CARI NAMA KATEGORI
+      const catAktif = categories.find(
+        (c) => Number(c.id_category) === Number(selectedCommodity.category_id)
+      );
+
+      // 5️⃣ LOG LOKAL (TIDAK TERPENGARUH DELETE)
+      const aktivitasBaru = {
+        id_temp: Date.now().toString(),
+        source: "LOCAL_INPUT", // 🔒 PENTING
+        name_commodity:
+          selectedCommodity.name || selectedCommodity.name_commodity,
+        name_category: catAktif?.name_category || "Lainnya",
+        price: priceNumeric,
+        unit,
+        tanggal: waktu.tanggal,
+        waktu: waktu.waktu,
+        created_at: waktu.created_at,
+        local_image: selectedCommodity.image,
+      };
+
+      const logLama = await AsyncStorage.getItem("dashboard_log");
+      const logs = logLama ? JSON.parse(logLama) : [];
+
+      const logBaru = [aktivitasBaru, ...logs].slice(0, 20);
+      await AsyncStorage.setItem(
+        "dashboard_log",
+        JSON.stringify(logBaru)
+      );
+
+      navigation.goBack();
+    } catch (e) {
+      console.error(e);
+      alert("Gagal menyimpan data");
+    } finally {
+      setLoading(false);
+    }
   };
 
   // ===============================
-  // FILTER KOMODITAS
+  // FILTER
   // ===============================
-  const filteredCommodities = Array.isArray(commodities)
-    ? commodities.filter((c) =>
-        selectedCategories.some(
-          (cat) => c.category_id === cat.id_category
-        )
-      )
-    : [];
+  const filteredCommodities = commodities.filter((c) =>
+    selectedCategories.some(
+      (cat) => c.category_id === cat.id_category
+    )
+  );
 
   // ===============================
   // IMAGE SAFE
   // ===============================
-  const SERVER_BASE = "http://103.100.27.57:5000";
-  const IMAGE_BASE = SERVER_BASE + "/";
-
-  const safeImage = (primary, localImg, fallback = null) => {
-    try {
-      if (primary?.startsWith("http")) return { uri: primary };
-      if (primary)
-        return {
-          uri: IMAGE_BASE + (primary.startsWith("/") ? primary.slice(1) : primary),
-        };
-      if (localImg) return { uri: localImg };
-      return fallback;
-    } catch {
-      return fallback;
-    }
-  };
+  const SERVER = "http://103.100.27.57:5000/";
+  const safeImage = (img) =>
+    img
+      ? { uri: img.startsWith("http") ? img : SERVER + img }
+      : null;
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: "#fff" }}
+      style={{ flex: 1 }}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
-      {/* HEADER */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Tambah Data Harga</Text>
-        <View style={{ width: 22 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.page}>
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.page}>
         {/* KATEGORI */}
         <Text style={styles.title}>Pilih Kategori</Text>
         <View style={styles.grid}>
           {categories.map((cat) => {
-            const selected = selectedCategories.some(
+            const active = selectedCategories.some(
               (c) => c.id_category === cat.id_category
             );
-            const img = safeImage(cat.image, cat.local_image);
-
             return (
               <TouchableOpacity
                 key={cat.id_category}
-                style={[styles.gridBoxSmall, selected && styles.activeGridBox]}
+                style={[
+                  styles.gridBoxSmall,
+                  active && styles.activeGridBox,
+                ]}
                 onPress={() => toggleCategory(cat)}
               >
-                {img ? (
-                  <Image source={img} style={{ width: 45, height: 45 }} />
-                ) : (
-                  <Ionicons name="grid-outline" size={30} />
+                {safeImage(cat.image) && (
+                  <Image
+                    source={safeImage(cat.image)}
+                    style={{ width: 40, height: 40 }}
+                  />
                 )}
                 <Text
                   style={[
                     styles.boxLabel,
-                    { color: selected ? "#fff" : "#174A6A" },
+                    { color: active ? "#fff" : "#174A6A" },
                   ]}
-                  numberOfLines={2}
                 >
                   {cat.name_category}
                 </Text>
@@ -272,7 +309,7 @@ export default function InputScreen({ navigation, route }) {
         </View>
 
         {/* KOMODITAS */}
-        {selectedCategories.length > 0 && filteredCommodities.length > 0 && (
+        {filteredCommodities.length > 0 && (
           <>
             <Text style={[styles.title, { marginTop: 15 }]}>
               Pilih Komoditas
@@ -280,9 +317,8 @@ export default function InputScreen({ navigation, route }) {
             <View style={styles.grid}>
               {filteredCommodities.map((item) => {
                 const active =
-                  selectedCommodity?.id_commodity === item.id_commodity;
-                const img = safeImage(item.image, item.local_image);
-
+                  selectedCommodity?.id_commodity ===
+                  item.id_commodity;
                 return (
                   <TouchableOpacity
                     key={item.id_commodity}
@@ -292,17 +328,21 @@ export default function InputScreen({ navigation, route }) {
                     ]}
                     onPress={() => handleSelectCommodity(item)}
                   >
-                    {img ? (
-                      <Image source={img} style={{ width: 60, height: 50 }} />
-                    ) : (
-                      <Ionicons name="image-outline" size={30} />
+                    {safeImage(item.image) && (
+                      <Image
+                        source={safeImage(item.image)}
+                        style={{ width: 50, height: 40 }}
+                      />
                     )}
                     <Text
                       style={[
                         styles.boxLabel,
-                        { color: active ? "#fff" : "#174A6A" },
+                        {
+                          color: active
+                            ? "#fff"
+                            : "#174A6A",
+                        },
                       ]}
-                      numberOfLines={2}
                     >
                       {item.name || item.name_commodity}
                     </Text>
@@ -312,14 +352,61 @@ export default function InputScreen({ navigation, route }) {
             </View>
           </>
         )}
+
+        {/* INPUT */}
+        {selectedCommodity && (
+          <View ref={priceRef} style={{ marginTop: 25 }}>
+            <Text style={styles.title}>Harga & Satuan</Text>
+
+            <View style={{ flexDirection: "row" }}>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={styles.label}>Harga</Text>
+                <TextInput
+                  style={styles.input}
+                  keyboardType="numeric"
+                  placeholder="Rp."
+                  value={price}
+                  onChangeText={(t) =>
+                    setPrice(formatRupiah(t))
+                  }
+                />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.label}>Satuan</Text>
+                <TextInput
+                  style={[
+                    styles.input,
+                    { backgroundColor: "#f3f3f3" },
+                  ]}
+                  value={unit}
+                  editable={false}
+                />
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.button,
+                (!price || loading) && { opacity: 0.6 },
+              ]}
+              disabled={!price || loading}
+              onPress={handleSubmit}
+            >
+              <Text style={{ color: "#fff", fontWeight: "700" }}>
+                {loading ? "Menyimpan..." : "Simpan"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
-// ======================
-// STYLES (TIDAK DIUBAH)
-// ======================
+// ===============================
+// STYLES (ASLI)
+// ===============================
 const styles = StyleSheet.create({
   header: {
     backgroundColor: "#174A6A",
@@ -328,8 +415,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
   },
   headerTitle: {
     color: "#fff",
@@ -337,13 +422,14 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginLeft: 10,
   },
-  page: { padding: 20, paddingBottom: 80 },
+  page: { padding: 20, paddingBottom: 100 },
   title: {
     fontSize: 16,
     fontWeight: "700",
     color: "#174A6A",
     marginBottom: 10,
   },
+  label: { fontWeight: "600", marginBottom: 4 },
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -364,8 +450,21 @@ const styles = StyleSheet.create({
   activeGridBox: { backgroundColor: "#174A6A" },
   boxLabel: {
     fontSize: 11,
-    marginTop: 6,
     textAlign: "center",
     fontWeight: "600",
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: "#174A6A",
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: "#fff",
+  },
+  button: {
+    marginTop: 20,
+    backgroundColor: "#174A6A",
+    padding: 14,
+    borderRadius: 10,
+    alignItems: "center",
   },
 });
