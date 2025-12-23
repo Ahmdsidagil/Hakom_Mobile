@@ -1,8 +1,8 @@
 // ========================================
-// 📦 config/api.js (FINAL FIXED – lengkap)
+// 📦 config/api.js
 // ========================================
 
-const BASE_URL = "http://103.100.27.57:5100/api"; // ganti sesuai server kamu
+const BASE_URL = "http://103.100.27.57:5100/api";
 
 export default {
   BASE_URL,
@@ -10,6 +10,7 @@ export default {
   // 🔐 Auth
   LOGIN: `${BASE_URL}/login-mobile`,
   UPDATE_PASSWORD: `${BASE_URL}/change-password`,
+  USER_INFO: `${BASE_URL}/userinfo`,
 
   // 📦 Master Data
   CATEGORIES: `${BASE_URL}/categories`,
@@ -17,17 +18,15 @@ export default {
   GET_MARKET: `${BASE_URL}/markets`,
   UNIT: `${BASE_URL}/units`,
 
-  // 📊 Harga (single input)
-  ADD_PRICE: `${BASE_URL}/sync/price`, // ini endpoint single harga
-
-  // 📡 Batch sync offline → server
-  SYNC_PRICES: `${BASE_URL}/sync`,
-
-  // ⬇ Restore semua harga (server → lokal)
-  // --- INI YANG PENTING ---
-  PRICE_ALL: `${BASE_URL}/price/all`,
-
-  // 📡 Endpoin lama (dipakai DetailHargaScreen & DataLocal)
+  // 📊 Harga (Operations)
+  ADD_PRICE: `${BASE_URL}/sync/price`,     // Input single
+  SYNC_PRICES: `${BASE_URL}/sync`,         // Batch sync
+  
+  // ⬇️ Restore & History (Sering menyebabkan error jika tidak ada)
+  PRICE_ALL: `${BASE_URL}/price/all`,      // Digunakan di restoreAllPrices
+  PRICE_DETAIL: `${BASE_URL}/prices/detail`, // <--- WAJIB ADA untuk syncPriceHistoryFromServer
+  
+  // 📡 Endpoint Lainnya
   PRICE: `${BASE_URL}/prices`,
 };
 
@@ -43,8 +42,10 @@ export const userInfo = async (token) => {
         "Content-Type": "application/json",
       },
     });
-    const data = await response.json();
-    return data;
+
+    if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+    
+    return await response.json();
   } catch (err) {
     console.error("❌ Gagal ambil dashboard:", err);
     return null;

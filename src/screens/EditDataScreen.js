@@ -148,8 +148,8 @@ export default function EditDataScreen({ route, navigation }) {
           value={
             item.nama_komoditas ||
             item.nama ||
-            item.local_nama || // Fallback untuk nama lokal
-            item.commodity_name || // Fallback untuk nama umum
+            item.local_nama || 
+            item.commodity_name ||
             "-"
           }
           editable={false}

@@ -1,4 +1,3 @@
-// src/screens/NotificationScreen.js
 import React, { useEffect, useState } from "react";
 import {
   View,
@@ -16,7 +15,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 // ======================
 let notificationListeners = [];
 
-
 export const pushNotification = async ({ type, title, message }) => {
   try {
     const stored = await AsyncStorage.getItem("notifications");
@@ -33,7 +31,6 @@ export const pushNotification = async ({ type, title, message }) => {
     const updatedList = [newNotif, ...notifList];
     await AsyncStorage.setItem("notifications", JSON.stringify(updatedList));
 
-    // 🔹 Update semua listener global (realtime)
     notificationListeners.forEach((fn) => fn(updatedList));
   } catch (err) {
     console.error("❌ Gagal push notifikasi:", err);
@@ -46,7 +43,6 @@ export const pushNotification = async ({ type, title, message }) => {
 export default function NotificationScreen({ navigation }) {
   const [notifications, setNotifications] = useState([]);
 
-  // Load notifikasi awal dari AsyncStorage
   const loadNotifications = async () => {
     try {
       const stored = await AsyncStorage.getItem("notifications");
@@ -59,12 +55,10 @@ export default function NotificationScreen({ navigation }) {
   useEffect(() => {
     loadNotifications();
 
-    // Daftarkan listener realtime
     const listener = (newList) => setNotifications(newList);
     notificationListeners.push(listener);
 
     return () => {
-      // Hapus listener saat unmount
       notificationListeners = notificationListeners.filter((fn) => fn !== listener);
     };
   }, []);
@@ -82,7 +76,36 @@ export default function NotificationScreen({ navigation }) {
     }
   };
 
-  // Hapus notifikasi
+  // ======================
+  // FORMAT WAKTU
+  // ======================
+  const formatTime = (iso) => {
+    if (!iso) return "";
+
+    const date = new Date(iso);
+    const months = [
+      "januari",
+      "februari",
+      "maret",
+      "april",
+      "mei",
+      "juni",
+      "juli",
+      "agustus",
+      "september",
+      "oktober",
+      "november",
+      "desember",
+    ];
+
+    return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}, ${String(
+      date.getHours()
+    ).padStart(2, "0")}.${String(date.getMinutes()).padStart(2, "0")}`;
+  };
+
+  // ======================
+  // HAPUS NOTIFIKASI
+  // ======================
   const handleDelete = (id) => {
     Alert.alert(
       "Hapus Notifikasi",
@@ -94,17 +117,12 @@ export default function NotificationScreen({ navigation }) {
           style: "destructive",
           onPress: async () => {
             try {
-              // Ambil data dari AsyncStorage agar konsisten
               const stored = await AsyncStorage.getItem("notifications");
               const notifList = stored ? JSON.parse(stored) : [];
               const updated = notifList.filter((n) => n.id !== id);
 
               await AsyncStorage.setItem("notifications", JSON.stringify(updated));
-
-              // 🔹 Update state lokal
               setNotifications(updated);
-
-              // 🔹 Update listener global agar sinkron di seluruh app
               notificationListeners.forEach((fn) => fn(updated));
             } catch (err) {
               console.error("❌ Gagal hapus notifikasi:", err);
@@ -117,21 +135,25 @@ export default function NotificationScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      {/* HEADER */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={26} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Notifikasi</Text>
-        <View style={{ width: 26 }} />
       </View>
 
-      {/* Body */}
+      {/* BODY */}
       <ScrollView style={styles.body} showsVerticalScrollIndicator={false}>
         {notifications.length > 0 ? (
           notifications.map((notif) => (
             <TouchableOpacity
               key={notif.id}
+              onPress={() =>
+                navigation.navigate("DetailHarga", {
+                  notification: notif,
+                })
+              }
               onLongPress={() => handleDelete(notif.id)}
               style={[
                 styles.notifCard,
@@ -143,9 +165,7 @@ export default function NotificationScreen({ navigation }) {
               <View style={styles.textContainer}>
                 <Text style={styles.notifTitle}>{notif.title || ""}</Text>
                 <Text style={styles.notifMessage}>{notif.message || ""}</Text>
-                <Text style={styles.notifTime}>
-                  {notif.timestamp ? new Date(notif.timestamp).toLocaleString("id-ID") : ""}
-                </Text>
+                <Text style={styles.notifTime}>{formatTime(notif.timestamp)}</Text>
               </View>
             </TouchableOpacity>
           ))
@@ -162,17 +182,33 @@ export default function NotificationScreen({ navigation }) {
 // ======================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F3F4F6" },
+
   header: {
     flexDirection: "row",
     alignItems: "center",
     paddingTop: 50,
-    paddingBottom: 20,
-    paddingHorizontal: 20,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+    borderRadius: 16,
     backgroundColor: "#174A6A",
-    justifyContent: "space-between",
   },
-  headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
-  body: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
+
+  backBtn: {
+    marginRight: 12,
+  },
+
+  headerTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+  },
+
+  body: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
+
   notifCard: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -184,10 +220,31 @@ const styles = StyleSheet.create({
     borderLeftWidth: 5,
     borderLeftColor: "#22c55e",
   },
+
   icon: { marginRight: 10, marginTop: 2 },
   textContainer: { flex: 1 },
-  notifTitle: { fontSize: 14, fontWeight: "700", color: "#111827" },
-  notifMessage: { fontSize: 13, color: "#6B7280", marginTop: 2 },
-  notifTime: { fontSize: 11, color: "#9CA3AF", marginTop: 4 },
-  emptyText: { textAlign: "center", marginTop: 20, color: "#6B7280" },
+
+  notifTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#111827",
+  },
+
+  notifMessage: {
+    fontSize: 13,
+    color: "#6B7280",
+    marginTop: 2,
+  },
+
+  notifTime: {
+    fontSize: 11,
+    color: "#9CA3AF",
+    marginTop: 4,
+  },
+
+  emptyText: {
+    textAlign: "center",
+    marginTop: 20,
+    color: "#6B7280",
+  },
 });

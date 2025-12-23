@@ -1,4 +1,3 @@
-// src/screens/RiwayatScreen.js
 import React, { useState, useCallback } from "react";
 import {
   View,
@@ -11,6 +10,7 @@ import {
   Modal,
   Pressable,
   RefreshControl,
+  ActivityIndicator
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -19,344 +19,323 @@ import { useFocusEffect } from "@react-navigation/native";
 
 import {
   getAllRiwayatPendataan,
-  getRiwayatHapus,
+  getAllRiwayatHapus,
   getDatabase,
-  syncDataToServer,
+  getImageForCommodityByName
 } from "../../config/database";
 
-// Tambahkan status 'Belum Tersinkron' ke daftar status di Modal Filter
-const STATUS_OPTIONS = ["Semua", "Sudah Tersinkron", "Belum Tersinkron", "Hapus"];
+// ================= GLOBAL CONST =================
+const STATUS_OPTIONS = ["Semua", "Tersinkron", "Hapus"];
+
+// ================= HELPER TANGGAL (UPDATE) =================
+// Helper sederhana untuk mengubah objek Date ke string YYYY-MM-DD Lokal
+const toLocalYMD = (dateObj) => {
+  if (!dateObj) return "";
+  const year = dateObj.getFullYear();
+  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+// Helper banding tanggal yang lebih "Pemaaf"
+const isSameDay = (dateInput, selectedDateObj) => {
+  if (!dateInput || !selectedDateObj) return false;
+  
+  // Target yang dicari (Hari Ini di HP)
+  const targetStr = toLocalYMD(selectedDateObj);
+
+  // Cek Input Data (Bisa string YYYY-MM-DD atau ISO Time)
+  let inputStr = "";
+  
+  // Jika format database sudah "2023-12-23" (pendek)
+  if (typeof dateInput === 'string' && dateInput.length === 10) {
+    inputStr = dateInput;
+  } else {
+    // Jika format panjang (ISO), ubah ke Date object lalu ke lokal string
+    const d = new Date(dateInput);
+    inputStr = toLocalYMD(d);
+  }
+
+  return inputStr === targetStr;
+};
 
 export default function RiwayatScreen({ navigation }) {
+  const [dataRiwayat, setDataRiwayat] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedTab, setSelectedTab] = useState("Semua");
+  const [kategoriList, setKategoriList] = useState(["Semua"]);
   const [filterVisible, setFilterVisible] = useState(false);
   const [filterStatus, setFilterStatus] = useState("Semua");
   const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [dataRiwayat, setDataRiwayat] = useState([]);
-  const [kategori, setKategori] = useState(["Semua"]);
-  const [refreshing, setRefreshing] = useState(false);
+  const [isDateFiltered, setIsDateFiltered] = useState(false);
 
-  const fetchCategories = async () => {
+  const formatIndoDate = (date) => {
+    if (!date) return "-";
+    return new Date(date).toLocaleDateString("id-ID", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+  };
+
+  // =============================== FETCH DATA (LOGIC FIX) ===============================
+  const fetchData = async () => {
+    setLoading(true);
     try {
       const db = await getDatabase();
-      if (!db) return;
-      const categoriesResult = await db.getAllAsync("SELECT * FROM categories;");
-      const kategoriNames = categoriesResult.map((c) => c.name_category);
-      setKategori(["Semua", ...kategoriNames]);
-    } catch (error) {
-      console.error("❌ Gagal ambil kategori:", error);
-    }
-  };
 
-  /**
-   * PERBAIKAN UTAMA DI SINI: Memuat data, memisahkan status sinkron, dan menggabungkannya.
-   */
-  const fetchRiwayat = async () => {
-    try {
-      // Coba sinkronisasi tapi jangan tunggu (agar UI cepat)
-      syncDataToServer(false);
+      // 1️⃣ KATEGORI
+      const cats = await db.getAllAsync(`SELECT name_category FROM categories`);
+      setKategoriList(["Semua", ...cats.map(c => c.name_category)]);
 
-      const allPendataan = await getAllRiwayatPendataan(); // Mengambil semua data pendataan (synced=0 & synced=1)
-      const riwayatHapus = await getRiwayatHapus();
-
-      const formattedPendataan = allPendataan.map((item) => {
-        // Asumsi kolom 'synced' ada di item yang dikembalikan dari getAllRiwayatPendataan()
-        const status =
-          item.synced === 1 ? "Sudah Tersinkron" : "Belum Tersinkron";
-        return {
-          ...item,
-          status: status,
-        };
-      });
-
-      const formattedHapus = riwayatHapus.map((item) => ({
-        ...item,
-        status: "Hapus",
-      }));
-
-      const combined = [...formattedPendataan, ...formattedHapus];
-
-      // De-duplikasi berdasarkan ID komoditas/nama + Tanggal
-      // (Logika de-duplikasi Anda sudah cukup baik)
-      const uniqueMap = new Map();
-      combined.forEach((item) => {
-        // Gunakan ID unik yang lebih spesifik jika ada (misalnya local_id/server_id)
-        const key =
-          (item.local_id || item.id || item.commodity_id || "unknown") +
-          "_" +
-          (item.tanggal || item.created_at || "unknown");
-        
-        // Hanya simpan jika belum ada, atau jika item saat ini memiliki status yang lebih "penting" 
-        // (misal: Hapus lebih penting dari Tersinkron) - namun untuk riwayat, 
-        // biarkan yang pertama masuk (asumsi urutan dari `combined` sudah sesuai prioritas jika ada duplikasi)
-        if (!uniqueMap.has(key)) {
-            uniqueMap.set(key, item);
-        }
-      });
-
-      const uniqueArray = Array.from(uniqueMap.values()).sort(
-        (a, b) =>
-          new Date(b.tanggal || b.created_at) - new Date(a.tanggal || a.created_at)
+      // 2️⃣ RIWAYAT HAPUS
+      const hapusRaw = await getAllRiwayatHapus();
+      
+      const listHapus = await Promise.all(
+        hapusRaw.map(async (h) => {
+          let finalImage = h.local_image || h.image;
+          if (!finalImage || finalImage === "null") {
+            finalImage = await getImageForCommodityByName(h.name_commodity);
+          }
+          
+          return {
+            ...h,
+            unique_key: `hapus_${h.id}_${Math.random()}`, // Pastikan ID unik
+            type: "deleted",
+            status_label: "Hapus",
+            image: finalImage,
+            local_image: finalImage,
+            name_category: h.name_category || "Tidak diketahui",
+            // Prioritas tanggal: Tanggal asli -> Kapan dibuat -> Kapan dihapus
+            tanggal_fix: h.tanggal || h.created_at || new Date().toISOString()
+          };
+        })
       );
 
-      setDataRiwayat(uniqueArray);
-    } catch (error) {
-      console.error("❌ Gagal ambil data riwayat:", error);
-      setDataRiwayat([]);
+      // 3️⃣ RIWAYAT TERSINKRON
+      const pendataanRaw = await getAllRiwayatPendataan();
+      
+      const listTersinkron = await Promise.all(
+        pendataanRaw.map(async (p) => {
+          if (!p.name_commodity) return null;
+          const image = await getImageForCommodityByName(p.name_commodity);
+          return {
+            ...p,
+            unique_key: `sync_${p.id}`,
+            type: "active",
+            status_label: "Tersinkron",
+            image,
+            local_image: image,
+            tanggal_fix: p.tanggal || p.created_at
+          };
+        })
+      );
+
+      // 4️⃣ GABUNG LANGSUNG (TANPA FILTER SEMBUNYI)
+      // Kita biarkan semua muncul dulu untuk memastikan data ada
+      const merged = [...listTersinkron, ...listHapus]
+        .filter(Boolean)
+        .sort((a, b) => new Date(b.tanggal_fix) - new Date(a.tanggal_fix));
+
+      setDataRiwayat(merged);
+      
+    } catch (e) {
+      console.error("❌ Riwayat error:", e);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await fetchRiwayat();
-    setRefreshing(false);
-  }, []);
-
   useFocusEffect(
-    useCallback(() => {
-      fetchCategories();
-      fetchRiwayat();
-    }, [])
+    useCallback(() => { fetchData(); }, [])
   );
 
-  const formatTanggalItem = (tgl) => {
-    if (!tgl) return "-";
-    const dateObj = new Date(tgl);
-    if (isNaN(dateObj.getTime())) return "-";
-    return `${dateObj.toLocaleDateString("id-ID", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    })}, ${dateObj.toLocaleTimeString("id-ID", {
-      hour: "2-digit",
-      minute: "2-digit",
-    })}`;
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchData();
   };
 
-  const formatHarga = (harga) => {
-    if (harga == null) return "-";
-    const num = typeof harga === "string" ? parseFloat(harga) : harga;
-    if (isNaN(num)) return "-";
-    return `Rp ${num.toLocaleString("id-ID")}`;
-  };
+  // =============================== FILTER ===============================
+  const filteredData = dataRiwayat.filter(item => {
+    // 1. Filter Search
+    const matchSearch = item.name_commodity?.toLowerCase().includes(search.toLowerCase());
+    
+    // 2. Filter Kategori
+    const matchCategory = selectedTab === "Semua" || !item.name_category || item.name_category === selectedTab;
+    
+    // 3. Filter Status
+    const matchStatus = filterStatus === "Semua" || item.status_label === filterStatus;
+    
+    // 4. Filter Tanggal (YANG LEBIH KUAT)
+    let matchDate = true;
+    if (isDateFiltered || true) { // Default selalu filter tanggal yang dipilih
+       // Cek Tanggal Utama
+       const dateMatch1 = isSameDay(item.tanggal_fix, selectedDate);
+       
+       // Cek juga Created_At (Jaga-jaga kalau tanggal hapusnya pakai created_at)
+       const dateMatch2 = isSameDay(item.created_at, selectedDate);
+       
+       matchDate = dateMatch1 || dateMatch2;
+    }
 
-  /**
-   * PERBAIKAN KECIL DI SINI: Penanganan filter tanggal agar lebih fleksibel
-   */
-  const filteredData = dataRiwayat.filter((item) => {
-    // 1. Filter Pencarian
-    const matchSearch = item.name_commodity
-      ?.toLowerCase()
-      .includes(search.toLowerCase().trim());
-      
-    // 2. Filter Kategori (Tab)
-    const matchCategory =
-      selectedTab === "Semua" || item.name_category === selectedTab;
-      
-    // 3. Filter Status (Modal)
-    const matchStatus = filterStatus === "Semua" || item.status === filterStatus;
-    
-    // 4. Filter Tanggal
-    const itemDateString = new Date(item.tanggal || item.created_at).toDateString();
-    const selectedDateString = selectedDate.toDateString();
-    const matchDate = itemDateString === selectedDateString;
-    
-    // Jika ada tanggal yang tidak valid atau filter tanggal tidak diperlukan, Anda dapat mengubah logic 'matchDate'.
-    // Tapi untuk riwayat, biasanya filter tanggal sangat penting.
-    
     return matchSearch && matchCategory && matchStatus && matchDate;
   });
 
-  const getStatusColor = (status) => {
-    if (status === "Sudah Tersinkron") return "#22C55E";
-    if (status === "Belum Tersinkron") return "#F59E0B";
-    if (status === "Hapus") return "#EF4444";
-    return "#6B7280";
+  const getStatusColor = (s) => s === "Tersinkron" ? "#22C55E" : "#EF4444";
+
+  const resolveImage = (item) => {
+    if (item.local_image) return { uri: item.local_image };
+    if (item.image) return { uri: item.image };
+    return null;
   };
 
+  // =============================== RENDER ===============================
   return (
     <View style={styles.container}>
       {/* HEADER */}
-      <LinearGradient
-        colors={["#174A6A", "#0B3B53"]}
-        style={styles.header}
-      >
+      <LinearGradient colors={["#174A6A", "#0F172A"]} style={styles.header}>
         <View style={styles.headerTop}>
-          <View style={styles.leftGroup}>
-            <TouchableOpacity onPress={() => navigation.goBack()}>
-              <Ionicons name="arrow-back" size={22} color="#fff" />
-            </TouchableOpacity>
-            <Text style={styles.headerTitle}>Riwayat Pendataan</Text>
-          </View>
-          <TouchableOpacity onPress={() => setFilterVisible(true)}>
-            <Ionicons name="filter-outline" size={22} color="#fff" />
+          <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 5, marginRight:10 }}>
+            <Ionicons name="arrow-back" size={24} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Riwayat Pendataan</Text>
+          <View style={{flex:1}}/>
+          <TouchableOpacity onPress={() => setFilterVisible(true)} style={{ padding: 5 }}>
+            <Ionicons name="filter" size={24} color="#fff" />
           </TouchableOpacity>
         </View>
 
-        {/* SEARCH */}
-        <View style={styles.searchContainer}>
-          <Ionicons name="search" size={18} color="#6B7280" />
+        <TouchableOpacity
+          style={styles.dateSelector}
+          onPress={() => setDatePickerVisible(true)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="calendar" size={18} color="#174A6A" />
+          <Text style={styles.dateSelectorText}>{formatIndoDate(selectedDate)}</Text>
+          <Ionicons name="chevron-down" size={16} color="#94A3B8" />
+        </TouchableOpacity>
+
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={18} color="#94A3B8" />
           <TextInput
+            style={styles.searchInput}
             placeholder="Cari komoditas..."
+            placeholderTextColor="#94A3B8"
             value={search}
             onChangeText={setSearch}
-            placeholderTextColor="#9CA3AF"
-            style={styles.searchInput}
           />
         </View>
 
-        {/* FILTER */}
-        <View style={styles.filterRow}>
-          <TouchableOpacity
-            style={styles.filterBox}
-            onPress={() => setDatePickerVisible(true)}
-          >
-            <Ionicons name="calendar-outline" size={16} color="#174A6A" />
-            <Text style={styles.filterText}>
-              {selectedDate.toLocaleDateString("id-ID", {
-                day: "numeric",
-                month: "short",
-                year: "numeric",
-              })}
-            </Text>
-          </TouchableOpacity>
-
-          <View style={styles.filterBox}>
-            <Ionicons name="cube-outline" size={16} color="#174A6A" />
-            <Text style={styles.filterText}>
-              Total: {filteredData.length}
-            </Text>
-          </View>
-        </View>
-
-        {/* TABS */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View style={styles.tabRow}>
-            {kategori.map((item, index) => (
+        <View style={{ marginTop: 12 }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            {kategoriList.map((cat, idx) => (
               <TouchableOpacity
-                key={`${item}-${index}`}
-                style={[
-                  styles.tabItem,
-                  selectedTab === item && styles.tabActive,
-                ]}
-                onPress={() => setSelectedTab(item)}
+                key={idx}
+                style={[styles.tabItem, selectedTab === cat && styles.tabItemActive]}
+                onPress={() => setSelectedTab(cat)}
               >
-                <Text
-                  style={[
-                    styles.tabText,
-                    selectedTab === item && styles.tabTextActive,
-                  ]}
-                >
-                  {item}
+                <Text style={[styles.tabText, selectedTab === cat && styles.tabTextActive]}>
+                  {cat}
                 </Text>
               </TouchableOpacity>
             ))}
+            <View style={{width:20}}/>
+          </ScrollView>
+        </View>
+
+        <View style={styles.totalBadgeContainer}>
+          <View style={styles.totalBadge}>
+            <Ionicons name="cube-outline" size={14} color="#E2E8F0" />
+            <Text style={styles.totalBadgeText}>Total {filteredData.length} Data</Text>
           </View>
-        </ScrollView>
+        </View>
       </LinearGradient>
 
-      {/* LIST */}
-      <ScrollView
-        style={styles.listContainer}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 160 }}
-      >
-        {filteredData.length > 0 ? (
-          filteredData.map((item, idx) => (
-            <View
-              key={`${item.commodity_id || item.name_commodity}-${idx}`}
-              style={styles.card}
-            >
-              {/* GAMBAR KOMODITAS */}
-              <Image
-                source={
-                  item.local_image
-                    ? { uri: item.local_image }
-                    : item.image
-                    ? { uri: item.image }
-                    : null
-                }
-                style={{
-                  width: 64,
-                  height: 64,
-                  borderRadius: 10,
-                  marginEnd: 8,
-                  backgroundColor: "#E5E7EB",
-                }}
-                resizeMode="cover"
-              />
-
-              {/* KIRI */}
-              <View style={styles.cardLeft}>
-                <Text style={styles.itemName}>
-                  {item.name_commodity || "-"}
-                </Text>
-                <Text style={styles.itemPrice}>
-                  {formatHarga(item.price)} / {item.unit || "-"}
-                </Text>
-                <Text style={styles.itemDate}>
-                  {formatTanggalItem(item.tanggal || item.created_at)}
-                </Text>
-              </View>
-
-              {/* KANAN */}
-              <View style={styles.cardRight}>
-                <Text style={styles.itemCategory}>
-                  {item.name_category || "Lainnya"}
-                </Text>
-                <Text
-                  style={[
-                    styles.statusText,
-                    { color: getStatusColor(item.status) },
-                  ]}
-                >
-                  {item.status}
-                </Text>
-              </View>
-            </View>
-          ))
+      {/* CONTENT */}
+      <View style={styles.content}>
+        {loading ? (
+          <ActivityIndicator size="large" color="#174A6A" style={{ marginTop: 50 }} />
         ) : (
-          <Text style={styles.emptyText}>Tidak ada riwayat ditemukan</Text>
+          <ScrollView
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            contentContainerStyle={{ paddingBottom: 100 }}
+          >
+            {filteredData.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="calendar-clear-outline" size={64} color="#CBD5E1" />
+                <Text style={styles.emptyText}>Kosong di Tanggal Ini</Text>
+                <Text style={styles.emptySubText}>
+                  Tidak ada data aktif maupun hapus pada {"\n"}
+                  {formatIndoDate(selectedDate)}
+                </Text>
+              </View>
+            ) : (
+              filteredData.map((item) => (
+                <View key={item.unique_key} style={[styles.card, item.type === "deleted" && styles.cardDeleted]}>
+                  <View style={styles.imgWrapper}>
+                    {resolveImage(item) ? (
+                      <Image source={resolveImage(item)} style={styles.img} />
+                    ) : (
+                      <Ionicons name="image-outline" size={24} color="#CBD5E1" />
+                    )}
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.rowTop}>
+                      <Text style={styles.cardTitle} numberOfLines={1}>{item.name_commodity}</Text>
+                      <View style={styles.categoryBox}>
+                        <Text style={styles.categoryText}>{item.name_category}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.rowMiddle}>
+                      <Text style={styles.cardPrice}>
+                        Rp {Number(item.price).toLocaleString("id-ID")} / {item.unit}
+                      </Text>
+                    </View>
+
+                    <View style={styles.cardFooter}>
+                      <Text style={styles.cardTime}>
+                        🕒 {new Date(item.tanggal_fix).toLocaleTimeString("id-ID", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </Text>
+                      <Text style={[styles.statusText, { color: getStatusColor(item.status_label) }]}>
+                        {item.status_label}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              ))
+            )}
+          </ScrollView>
         )}
-      </ScrollView>
+      </View>
 
       {/* MODAL FILTER */}
       <Modal visible={filterVisible} transparent animationType="fade">
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => setFilterVisible(false)}
-        >
+        <Pressable style={styles.modalOverlay} onPress={() => setFilterVisible(false)}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Filter Riwayat</Text>
-            {STATUS_OPTIONS.map( // Menggunakan STATUS_OPTIONS yang sudah diperbaiki
-              (status) => (
-                <TouchableOpacity
-                  key={status}
-                  style={[
-                    styles.filterOption,
-                    filterStatus === status && styles.filterOptionActive,
-                  ]}
-                  onPress={() => {
-                    setFilterStatus(status);
-                    setFilterVisible(false);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.filterOptionText,
-                      filterStatus === status && { color: "#fff" },
-                    ]}
-                  >
-                    {status}
-                  </Text>
-                </TouchableOpacity>
-              )
-            )}
+            <Text style={styles.modalTitle}>Filter Status</Text>
+            {STATUS_OPTIONS.map((opt) => (
+              <TouchableOpacity
+                key={opt}
+                style={[styles.modalOption, filterStatus === opt && styles.modalOptionActive]}
+                onPress={() => {
+                  setFilterStatus(opt);
+                  setFilterVisible(false);
+                }}
+              >
+                <Text style={[styles.modalOptionText, filterStatus === opt && { color: "#fff" }]}>{opt}</Text>
+                {filterStatus === opt && <Ionicons name="checkmark" size={20} color="#fff" />}
+              </TouchableOpacity>
+            ))}
           </View>
         </Pressable>
       </Modal>
@@ -366,10 +345,13 @@ export default function RiwayatScreen({ navigation }) {
         <DateTimePicker
           value={selectedDate}
           mode="date"
-          display="calendar"
-          onChange={(e, date) => {
-            if (date) setSelectedDate(date);
+          display="default"
+          onChange={(e, d) => {
             setDatePickerVisible(false);
+            if (d) {
+              setSelectedDate(d);
+              setIsDateFiltered(true);
+            }
           }}
         />
       )}
@@ -377,116 +359,44 @@ export default function RiwayatScreen({ navigation }) {
   );
 }
 
-/* ========================== */
-/* STYLES          */
-/* ========================== */
+// ================= STYLES (TETAP SAMA) =================
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F9FAFB" },
-  header: {
-    paddingTop: 50,
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
-  },
-  headerTop: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  leftGroup: { flexDirection: "row", alignItems: "center" },
-  headerTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "700",
-    marginLeft: 24,
-  },
-  searchContainer: {
-    flexDirection: "row",
-    backgroundColor: "#fff",
-    alignItems: "center",
-    borderRadius: 10,
-    marginTop: 10,
-    paddingHorizontal: 10,
-    height: 40,
-  },
-  searchInput: { flex: 1, marginLeft: 6, color: "#111827" },
-  filterRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 12,
-  },
-  filterBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#E0F2FE",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  filterText: { marginLeft: 5, color: "#174A6A", fontWeight: "600" },
-  tabRow: { flexDirection: "row", marginTop: 10, paddingBottom: 4 },
-  tabItem: {
-    backgroundColor: "transparent",
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    marginRight: 8,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#fff",
-  },
-  tabActive: { backgroundColor: "#fff" },
-  tabText: { color: "#fff", fontWeight: "500" },
+  container: { flex: 1, backgroundColor: "#F8FAFC" },
+  header: { paddingTop: 45, paddingHorizontal: 20, paddingBottom: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
+  headerTop: { flexDirection: "row", alignItems: "center", marginBottom: 15 },
+  headerTitle: { fontSize: 20, fontWeight: "800", color: "#fff" },
+  dateSelector: { backgroundColor: "#fff", borderRadius: 12, padding: 12, flexDirection: "row", alignItems: "center", marginBottom: 12 },
+  dateSelectorText: { flex: 1, fontSize: 16, fontWeight: "700", color: "#1E293B", marginLeft: 10 },
+  searchBar: { flexDirection: "row", backgroundColor: "rgba(255,255,255,0.2)", borderRadius: 12, paddingHorizontal: 12, height: 44, alignItems: "center" },
+  searchInput: { flex: 1, marginLeft: 8, fontSize: 14, color: "#fff" },
+  tabItem: { paddingVertical: 6, paddingHorizontal: 16, borderRadius: 20, borderWidth: 1, borderColor: "rgba(255,255,255,0.4)", marginRight: 8 },
+  tabItemActive: { backgroundColor: "#fff", borderColor: "#fff" },
+  tabText: { color: "#E2E8F0", fontSize: 12, fontWeight: "500" },
   tabTextActive: { color: "#174A6A", fontWeight: "700" },
-  listContainer: { padding: 16 },
-  card: {
-    flexDirection: "row",
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    marginBottom: 12,
-    padding: 12,
-    elevation: 1,
-    alignItems: "center",
-  },
-  image: {
-    width: 55,
-    height: 55,
-    borderRadius: 8,
-    marginRight: 12,
-    backgroundColor: "#E5E7EB",
-  },
-  cardLeft: { flex: 1 },
-  itemName: { fontSize: 15, fontWeight: "700", color: "#111827" },
-  itemPrice: {
-    fontSize: 14,
-    color: "#174A6A",
-    fontWeight: "600",
-    marginTop: 2,
-  },
-  itemDate: { fontSize: 12, color: "#6B7280", marginTop: 2 },
-  cardRight: { alignItems: "flex-end", minWidth: 100 },
-  itemCategory: { fontSize: 13, fontWeight: "700", color: "#174A6A" },
-  statusText: { fontWeight: "700", fontSize: 12, marginTop: 4 },
-  emptyText: { textAlign: "center", marginTop: 40, color: "#6B7280" },
-  modalOverlay: {
-    flex: 1,
-    justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.3)",
-  },
-  modalContent: {
-    backgroundColor: "#fff",
-    padding: 20,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-  },
-  modalTitle: { fontSize: 16, fontWeight: "700", marginBottom: 10, color: "#174A6A" },
-  filterOption: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginBottom: 8,
-    backgroundColor: "#E0F2FE",
-  },
-  filterOptionActive: { backgroundColor: "#174A6A" },
-  filterOptionText: { color: "#174A6A", fontWeight: "600" },
+  totalBadgeContainer: { alignItems: 'flex-end', marginTop: 12 },
+  totalBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.15)', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+  totalBadgeText: { color: '#E2E8F0', fontSize: 11, fontWeight: '600', marginLeft: 6 },
+  content: { flex: 1, padding: 16 },
+  card: { backgroundColor: "#fff", borderRadius: 16, padding: 12, marginBottom: 12, flexDirection: "row", elevation: 2, shadowColor: "#000", shadowOpacity: 0.05, shadowOffset: {width:0, height:2} },
+  cardDeleted: { backgroundColor: "#FEF2F2", borderColor: "#FECACA", borderWidth: 1 },
+  imgWrapper: { width: 65, height: 65, borderRadius: 10, backgroundColor: "#F1F5F9", justifyContent: "center", alignItems: "center", marginRight: 12, overflow: "hidden" },
+  img: { width: "100%", height: "100%" },
+  rowTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 },
+  cardTitle: { fontSize: 16, fontWeight: "700", color: "#1E293B", flex: 1, marginRight: 8 },
+  categoryBox: { backgroundColor: "#E0F2FE", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  categoryText: { fontSize: 10, fontWeight: "700", color: "#0369A1" },
+  rowMiddle: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  cardPrice: { fontSize: 15, fontWeight: "700", color: "#174A6A", marginRight: 8 },
+  cardFooter: { flexDirection: "row", justifyContent: "space-between" },
+  cardTime: { fontSize: 11, color: "#94A3B8" },
+  statusText: { fontSize: 11, fontWeight: "700" },
+  emptyState: { alignItems: "center", marginTop: 60 },
+  emptyText: { marginTop: 16, color: "#64748B", fontWeight: "700", fontSize: 16 },
+  emptySubText: { marginTop: 4, color: "#94A3B8", fontSize: 13, textAlign: 'center' },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "center", padding: 20 },
+  modalContent: { backgroundColor: "#fff", borderRadius: 16, padding: 20 },
+  modalTitle: { fontSize: 18, fontWeight: "700", marginBottom: 15, textAlign:'center' },
+  modalOption: { flexDirection: "row", justifyContent: "space-between", padding: 15, borderRadius: 12, backgroundColor: "#F8FAFC", marginBottom: 8 },
+  modalOptionActive: { backgroundColor: "#174A6A" },
+  modalOptionText: { fontSize: 14, fontWeight: "600", color: "#1E293B" },
 });

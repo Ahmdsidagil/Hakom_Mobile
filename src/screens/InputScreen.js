@@ -1,5 +1,5 @@
 // ===============================
-// 📱 InputScreen.js (FULL FINAL — LOCAL DASHBOARD FIX)
+// 📱 InputScreen.js (FULL FINAL — NOTIF + STAY SCREEN FIX)
 // ===============================
 import React, { useEffect, useState, useRef } from "react";
 import {
@@ -12,6 +12,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  Alert,
+  Modal,
+  Animated,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -22,6 +25,9 @@ import {
   getDatabase,
   addPrice,
 } from "../../config/database";
+
+// 🔔 IMPORT NOTIFIKASI
+import { pushNotification } from "../../src/screens/NotificationScreen";
 
 export default function InputScreen({ navigation }) {
   const [categories, setCategories] = useState([]);
@@ -34,6 +40,10 @@ export default function InputScreen({ navigation }) {
   const [unit, setUnit] = useState("");
   const [price, setPrice] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // State untuk Popup Modern
+  const [popup, setPopup] = useState({ visible: false, type: "success", message: "" });
+  const popupAnim = useRef(new Animated.Value(0)).current;
 
   const scrollRef = useRef(null);
   const priceRef = useRef(null);
@@ -50,6 +60,26 @@ export default function InputScreen({ navigation }) {
       waktu: local.toISOString().split("T")[1].slice(0, 8),
       created_at: local.toISOString(),
     };
+  };
+
+  // ===============================
+  // POPUP LOGIC
+  // ===============================
+  const showPopup = (type, message) => {
+    setPopup({ visible: true, type, message });
+    Animated.spring(popupAnim, {
+      toValue: 1,
+      useNativeDriver: true,
+      friction: 5,
+    }).start();
+
+    setTimeout(() => {
+      Animated.timing(popupAnim, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }).start(() => setPopup({ ...popup, visible: false }));
+    }, 1000);
   };
 
   // ===============================
@@ -106,40 +136,25 @@ export default function InputScreen({ navigation }) {
     return clean.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   };
 
-  const rupiahToNumber = (val) =>
-    Number(val.replace(/\./g, "")) || 0;
+  const rupiahToNumber = (val) => Number(val.replace(/\./g, "")) || 0;
 
   // ===============================
-  // CATEGORY
+  // CATEGORY & COMMODITY SELECTION
   // ===============================
   const toggleCategory = (cat) => {
-    const exists = selectedCategories.some(
-      (c) => c.id_category === cat.id_category
-    );
-
+    const exists = selectedCategories.some((c) => c.id_category === cat.id_category);
     const updated = exists
-      ? selectedCategories.filter(
-          (c) => c.id_category !== cat.id_category
-        )
+      ? selectedCategories.filter((c) => c.id_category !== cat.id_category)
       : [...selectedCategories, cat];
 
     setSelectedCategories(updated);
-
-    if (
-      selectedCommodity &&
-      !updated.some(
-        (c) => c.id_category === selectedCommodity.category_id
-      )
-    ) {
+    if (selectedCommodity && !updated.some((c) => c.id_category === selectedCommodity.category_id)) {
       setSelectedCommodity(null);
       setUnit("");
       setPrice("");
     }
   };
 
-  // ===============================
-  // SELECT COMMODITY
-  // ===============================
   const handleSelectCommodity = async (item) => {
     setSelectedCommodity(item);
     setPrice("");
@@ -147,9 +162,7 @@ export default function InputScreen({ navigation }) {
     if (item.unit || item.name_unit) {
       setUnit(item.unit || item.name_unit);
     } else if (item.unit_id) {
-      const local = units.find(
-        (u) => Number(u.id) === Number(item.unit_id)
-      );
+      const local = units.find((u) => Number(u.id) === Number(item.unit_id));
       if (local) {
         setUnit(local.name_unit);
       } else {
@@ -165,20 +178,14 @@ export default function InputScreen({ navigation }) {
     }
 
     setTimeout(() => {
-      priceRef.current?.measureLayout(
-        scrollRef.current,
-        (_, y) => {
-          scrollRef.current.scrollTo({
-            y: y - 20,
-            animated: true,
-          });
-        }
-      );
+      priceRef.current?.measureLayout(scrollRef.current, (_, y) => {
+        scrollRef.current.scrollTo({ y: y - 20, animated: true });
+      });
     }, 300);
   };
 
   // ===============================
-  // SUBMIT (FIX UTAMA)
+  // SUBMIT (SIMPAN + NOTIFIKASI)
   // ===============================
   const handleSubmit = async () => {
     if (!selectedCommodity || !price) return;
@@ -186,35 +193,28 @@ export default function InputScreen({ navigation }) {
     setLoading(true);
     try {
       const priceNumeric = rupiahToNumber(price);
+      const namaKomoditas =
+        selectedCommodity.name || selectedCommodity.name_commodity;
 
-      // 1️⃣ SIMPAN KE SQLITE (SYNC SERVER)
+      // 1️⃣ SIMPAN KE SQLITE
       await addPrice(
         selectedCommodity.id_commodity,
         selectedCommodity.category_id,
         priceNumeric
       );
 
-      // 2️⃣ WAKTU LOKAL REALTIME
+      // 2️⃣ WAKTU LOKAL
       const waktu = getLocalDateTime();
 
-      // 3️⃣ CEK & RESET DASHBOARD JIKA GANTI HARI
-      const lastDate = await AsyncStorage.getItem("dashboard_date");
-      if (lastDate !== waktu.tanggal) {
-        await AsyncStorage.removeItem("dashboard_log");
-        await AsyncStorage.setItem("dashboard_date", waktu.tanggal);
-      }
-
-      // 4️⃣ CARI NAMA KATEGORI
+      // 3️⃣ LOG DASHBOARD
       const catAktif = categories.find(
         (c) => Number(c.id_category) === Number(selectedCommodity.category_id)
       );
 
-      // 5️⃣ LOG LOKAL (TIDAK TERPENGARUH DELETE)
       const aktivitasBaru = {
         id_temp: Date.now().toString(),
-        source: "LOCAL_INPUT", // 🔒 PENTING
-        name_commodity:
-          selectedCommodity.name || selectedCommodity.name_commodity,
+        source: "LOCAL_INPUT",
+        name_commodity: namaKomoditas,
         name_category: catAktif?.name_category || "Lainnya",
         price: priceNumeric,
         unit,
@@ -226,45 +226,56 @@ export default function InputScreen({ navigation }) {
 
       const logLama = await AsyncStorage.getItem("dashboard_log");
       const logs = logLama ? JSON.parse(logLama) : [];
-
-      const logBaru = [aktivitasBaru, ...logs].slice(0, 20);
       await AsyncStorage.setItem(
         "dashboard_log",
-        JSON.stringify(logBaru)
+        JSON.stringify([aktivitasBaru, ...logs].slice(0, 20))
       );
 
-      navigation.goBack();
+      // 🔔 NOTIFIKASI (DITAMBAH NAMA KOMODITAS)
+      await pushNotification({
+        type: "success",
+        title: "Input Berhasil",
+        message: `${namaKomoditas} berhasil disimpan`,
+        data: {
+          name_commodity: namaKomoditas,
+          price: priceNumeric,
+          category: catAktif?.name_category || "Lainnya",
+        },
+      });
+
+      // ✅ POPUP
+      showPopup("success", `${namaKomoditas} tersimpan`);
+      setPrice("");
     } catch (e) {
       console.error(e);
-      alert("Gagal menyimpan data");
+      showPopup("error", "Gagal menyimpan data");
+      await pushNotification({
+        type: "error",
+        title: "Gagal Menyimpan",
+        message: "Terjadi kesalahan sistem saat menyimpan harga.",
+      });
     } finally {
       setLoading(false);
     }
   };
 
   // ===============================
-  // FILTER
+  // RENDER
   // ===============================
   const filteredCommodities = commodities.filter((c) =>
-    selectedCategories.some(
-      (cat) => c.category_id === cat.id_category
-    )
+    selectedCategories.some((cat) => c.category_id === cat.id_category)
   );
 
-  // ===============================
-  // IMAGE SAFE
-  // ===============================
   const SERVER = "http://103.100.27.57:5000/";
   const safeImage = (img) =>
-    img
-      ? { uri: img.startsWith("http") ? img : SERVER + img }
-      : null;
+    img ? { uri: img.startsWith("http") ? img : SERVER + img } : null;
 
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
+      {/* HEADER */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
@@ -283,10 +294,7 @@ export default function InputScreen({ navigation }) {
             return (
               <TouchableOpacity
                 key={cat.id_category}
-                style={[
-                  styles.gridBoxSmall,
-                  active && styles.activeGridBox,
-                ]}
+                style={[styles.gridBoxSmall, active && styles.activeGridBox]}
                 onPress={() => toggleCategory(cat)}
               >
                 {safeImage(cat.image) && (
@@ -317,15 +325,11 @@ export default function InputScreen({ navigation }) {
             <View style={styles.grid}>
               {filteredCommodities.map((item) => {
                 const active =
-                  selectedCommodity?.id_commodity ===
-                  item.id_commodity;
+                  selectedCommodity?.id_commodity === item.id_commodity;
                 return (
                   <TouchableOpacity
                     key={item.id_commodity}
-                    style={[
-                      styles.gridBoxSmall,
-                      active && styles.activeGridBox,
-                    ]}
+                    style={[styles.gridBoxSmall, active && styles.activeGridBox]}
                     onPress={() => handleSelectCommodity(item)}
                   >
                     {safeImage(item.image) && (
@@ -337,11 +341,7 @@ export default function InputScreen({ navigation }) {
                     <Text
                       style={[
                         styles.boxLabel,
-                        {
-                          color: active
-                            ? "#fff"
-                            : "#174A6A",
-                        },
+                        { color: active ? "#fff" : "#174A6A" },
                       ]}
                     >
                       {item.name || item.name_commodity}
@@ -366,19 +366,14 @@ export default function InputScreen({ navigation }) {
                   keyboardType="numeric"
                   placeholder="Rp."
                   value={price}
-                  onChangeText={(t) =>
-                    setPrice(formatRupiah(t))
-                  }
+                  onChangeText={(t) => setPrice(formatRupiah(t))}
                 />
               </View>
 
               <View style={{ flex: 1 }}>
                 <Text style={styles.label}>Satuan</Text>
                 <TextInput
-                  style={[
-                    styles.input,
-                    { backgroundColor: "#f3f3f3" },
-                  ]}
+                  style={[styles.input, { backgroundColor: "#f3f3f3" }]}
                   value={unit}
                   editable={false}
                 />
@@ -386,10 +381,7 @@ export default function InputScreen({ navigation }) {
             </View>
 
             <TouchableOpacity
-              style={[
-                styles.button,
-                (!price || loading) && { opacity: 0.6 },
-              ]}
+              style={[styles.button, (!price || loading) && { opacity: 0.6 }]}
               disabled={!price || loading}
               onPress={handleSubmit}
             >
@@ -400,17 +392,34 @@ export default function InputScreen({ navigation }) {
           </View>
         )}
       </ScrollView>
+
+      {/* POPUP */}
+      <Modal transparent visible={popup.visible} animationType="fade">
+        <View style={styles.popupOverlay}>
+          <Animated.View
+            style={[styles.popupBox, { transform: [{ scale: popupAnim }] }]}
+          >
+            <Ionicons
+              name={
+                popup.type === "success"
+                  ? "checkmark-circle"
+                  : "close-circle"
+              }
+              size={46}
+              color={popup.type === "success" ? "#2ecc71" : "#e74c3c"}
+            />
+            <Text style={styles.popupText}>{popup.message}</Text>
+          </Animated.View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
 
-// ===============================
-// STYLES (ASLI)
-// ===============================
 const styles = StyleSheet.create({
   header: {
     backgroundColor: "#174A6A",
-    paddingTop: 40,
+    paddingTop: 50,
     paddingBottom: 16,
     paddingHorizontal: 16,
     flexDirection: "row",
@@ -448,11 +457,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
   },
   activeGridBox: { backgroundColor: "#174A6A" },
-  boxLabel: {
-    fontSize: 11,
-    textAlign: "center",
-    fontWeight: "600",
-  },
+  boxLabel: { fontSize: 11, textAlign: "center", fontWeight: "600" },
   input: {
     borderWidth: 1,
     borderColor: "#174A6A",
@@ -466,5 +471,26 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: 10,
     alignItems: "center",
+  },
+  popupOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  popupBox: {
+    backgroundColor: "#fff",
+    padding: 24,
+    borderRadius: 18,
+    alignItems: "center",
+    width: "75%",
+    elevation: 10,
+  },
+  popupText: {
+    marginTop: 10,
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#333",
+    textAlign: "center",
   },
 });

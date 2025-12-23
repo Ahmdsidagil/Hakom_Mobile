@@ -1,5 +1,5 @@
 // ===============================
-// 📱 DashboardScreen.js (VISUAL ASLI + LOG LOKAL + NOTIFIKASI)
+// 📱 DashboardScreen.js (FINAL — NO NOTIF + TIME FIX)
 // ===============================
 import React, { useEffect, useState, useCallback } from "react";
 import {
@@ -18,15 +18,29 @@ import { useFocusEffect } from "@react-navigation/native";
 
 import BottomNav from "../components/BottomNav";
 import { initDatabase } from "../../config/database";
-import { pushNotification } from "./NotificationScreen"; // ✅ TAMBAHAN AMAN
+
 
 // ===============================
-// Helper Formatter
+// Helper Waktu Lokal (ANTI UTC)
 // ===============================
+const getTodayLocalDate = () => {
+  const now = new Date();
+  const offset = now.getTimezoneOffset() * 60000;
+  return new Date(now - offset).toISOString().split("T")[0];
+};
+
+// ===============================
+// 🔧 FIX PARSE TANGGAL (ANTI DOUBLE UTC)
+// ===============================
+const parseLocalDate = (iso) => {
+  if (!iso) return null;
+  return new Date(iso.replace("Z", ""));
+};
+
 const formatTanggalItem = (tgl) => {
-  if (!tgl) return "-";
-  const d = new Date(tgl);
-  if (isNaN(d.getTime())) return "-";
+  const d = parseLocalDate(tgl);
+  if (!d || isNaN(d.getTime())) return "-";
+
   return `${d.toLocaleDateString("id-ID", {
     day: "numeric",
     month: "short",
@@ -62,35 +76,18 @@ export default function DashboardScreen({ navigation }) {
   // ===============================
   const reloadDashboard = useCallback(async () => {
     try {
-      const today = new Date().toISOString().split("T")[0];
+      const today = getTodayLocalDate();
       const logRaw = await AsyncStorage.getItem("dashboard_log");
       const allLogs = logRaw ? JSON.parse(logRaw) : [];
 
       const dataHariIni = allLogs.filter((it) => it.tanggal === today);
+
       setDashboardData(dataHariIni);
 
       const uniqueItems = new Set(
         dataHariIni.map((item) => item.name_commodity)
       );
       setUniqueCount(uniqueItems.size);
-
-      // ===============================
-      // 🔔 NOTIFIKASI SEKALI PER HARI
-      // ===============================
-      if (dataHariIni.length > 0) {
-        const notifKey = `dashboard_notif_${today}`;
-        const already = await AsyncStorage.getItem(notifKey);
-
-        if (!already) {
-          await pushNotification({
-            type: "info",
-            title: "Pendataan Hari Ini",
-            message: `${uniqueItems.size} komoditas sudah diinput hari ini`,
-          });
-
-          await AsyncStorage.setItem(notifKey, "1");
-        }
-      }
     } catch (e) {
       console.error("Dashboard load error:", e);
     }
@@ -115,8 +112,11 @@ export default function DashboardScreen({ navigation }) {
 
       const setup = async () => {
         await initDatabase();
+
         const storedUser = await AsyncStorage.getItem("user");
-        if (storedUser && mounted) setUser(JSON.parse(storedUser));
+        if (storedUser && mounted) {
+          setUser(JSON.parse(storedUser));
+        }
 
         const hour = new Date().getHours();
         setGreeting(
@@ -161,12 +161,6 @@ export default function DashboardScreen({ navigation }) {
         <Text style={styles.itemCategory} numberOfLines={1}>
           {item.name_category || "Lainnya"}
         </Text>
-        <Ionicons
-          name="cloud-done"
-          size={16}
-          color="#174A6A"
-          style={{ marginTop: 6 }}
-        />
       </View>
     </View>
   );
@@ -181,7 +175,7 @@ export default function DashboardScreen({ navigation }) {
   return (
     <View style={styles.container}>
       {/* HEADER */}
-      <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
+      <LinearGradient colors={["#174A6A", "#0F172A"]} style={styles.header}>
         <View style={styles.headerTop}>
           <View>
             <Text style={styles.greeting}>{greeting}!</Text>
@@ -203,7 +197,6 @@ export default function DashboardScreen({ navigation }) {
 
             <TouchableOpacity
               onPress={() => navigation.navigate("Notification")}
-              activeOpacity={0.7}
             >
               <Ionicons
                 name="notifications-outline"
@@ -269,7 +262,7 @@ export default function DashboardScreen({ navigation }) {
 }
 
 // ===============================
-// Styles (TIDAK DIUBAH)
+// Styles 
 // ===============================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F3F4F6" },
@@ -333,7 +326,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
-    color: "#174A6A",
+    color: "#0d7ec0ff",
   },
   emptyBox: { marginTop: 40, alignItems: "center" },
   emptyText: { color: "#9CA3AF", marginTop: 10 },

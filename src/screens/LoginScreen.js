@@ -1,7 +1,7 @@
 // ===============================
-// 📱 LoginScreen.js (FULL FINAL + CATEGORY & UNIT FETCH FIX)
+// 📱 LoginScreen.js (FULL FINAL + MODERN NOTIFICATION)
 // ===============================
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import api, { userInfo } from "../../config/api";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
@@ -15,9 +15,13 @@ import {
   Platform,
   ScrollView,
   Alert,
+  Animated, // Import Animated
+  Dimensions
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
+
+const { width } = Dimensions.get("window");
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState("");
@@ -25,9 +29,40 @@ export default function LoginScreen({ navigation }) {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // 🔔 STATE & REF UNTUK NOTIFIKASI MODERN
+  const [toastMessage, setToastMessage] = useState("");
+  const [toastType, setToastType] = useState("success"); // success | error
+  const slideAnim = useRef(new Animated.Value(-100)).current; // Posisi awal di atas layar (tersembunyi)
+
+  // FUNGSI MENAMPILKAN NOTIFIKASI
+  const showToast = (message, type = "success") => {
+    setToastMessage(message);
+    setToastType(type);
+
+    // Animasi Masuk (Slide Down)
+    Animated.spring(slideAnim, {
+      toValue: 50, // Posisi Y saat muncul
+      useNativeDriver: true,
+      friction: 5,
+    }).start();
+
+    // Sembunyikan otomatis setelah 2.5 detik (kecuali sukses login akan dihandle manual)
+    if (type !== "success") {
+        setTimeout(() => hideToast(), 3500);
+    }
+  };
+
+  const hideToast = () => {
+    Animated.timing(slideAnim, {
+      toValue: -100, // Kembali ke atas
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  };
+
   const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert("Peringatan", "Email dan kata sandi harus diisi!");
+      showToast("Email dan kata sandi harus diisi!", "error");
       return;
     }
 
@@ -46,7 +81,7 @@ export default function LoginScreen({ navigation }) {
       const data = await response.json();
 
       if (!response.ok || !data.token) {
-        Alert.alert("Gagal", data.message || "Login gagal!");
+        showToast(data.message || "Login gagal!", "error");
         setLoading(false);
         return;
       }
@@ -65,81 +100,82 @@ export default function LoginScreen({ navigation }) {
       }
 
       // ===============================
-      // 📦 AMBIL KOMODITAS
+      // 📦 DATA FETCHING (BACKGROUND)
       // ===============================
       try {
         const resKomoditas = await fetch(api.COMMODITIES, {
           method: "GET",
-          headers: {
-            Authorization: `Bearer ${data.token}`,
-            "Content-Type": "application/json",
-          },
+          headers: { Authorization: `Bearer ${data.token}`, "Content-Type": "application/json" },
         });
-
         if (resKomoditas.ok) {
           const komoditas = await resKomoditas.json();
           await AsyncStorage.setItem("commodities", JSON.stringify(komoditas));
-        } else {
-          console.warn("Fetch commodities gagal:", resKomoditas.status);
         }
-      } catch (err) {
-        console.warn("Fetch commodities error:", err);
-      }
+      } catch (err) { console.warn("Fetch comms err"); }
 
-      // ===============================
-      // 🔹 AMBIL KATEGORI
-      // ===============================
       try {
         const resCategories = await fetch(api.CATEGORIES, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${data.token}`,
-            "Content-Type": "application/json",
-          },
+            method: "GET",
+            headers: { Authorization: `Bearer ${data.token}`, "Content-Type": "application/json" },
         });
         if (resCategories.ok) {
-          const categories = await resCategories.json();
-          await AsyncStorage.setItem("categories", JSON.stringify(categories));
-        } else {
-          console.warn("Fetch categories gagal:", resCategories.status);
+            const categories = await resCategories.json();
+            await AsyncStorage.setItem("categories", JSON.stringify(categories));
         }
-      } catch (err) {
-        console.warn("Fetch categories error:", err);
-      }
+      } catch (err) { console.warn("Fetch cat err"); }
 
-      // ===============================
-      // 🔹 AMBIL UNIT (FIXED)
-      // ===============================
       try {
-        const resUnits = await fetch(api.UNIT, { // <-- perbaikan di sini
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${data.token}`,
-            "Content-Type": "application/json",
-          },
+        const resUnits = await fetch(api.UNIT, {
+            method: "GET",
+            headers: { Authorization: `Bearer ${data.token}`, "Content-Type": "application/json" },
         });
         if (resUnits.ok) {
-          const units = await resUnits.json();
-          await AsyncStorage.setItem("units", JSON.stringify(units));
-        } else {
-          console.warn("Fetch units gagal:", resUnits.status);
+            const units = await resUnits.json();
+            await AsyncStorage.setItem("units", JSON.stringify(units));
         }
-      } catch (err) {
-        console.warn("Fetch units error:", err);
-      }
+      } catch (err) { console.warn("Fetch unit err"); }
 
-      Alert.alert("Sukses", data.message || "Login berhasil");
-      navigation.replace("Dashboard");
+      // ✅ SUKSES LOGIN MODERN
+      showToast(`Selamat datang, ${user?.name || "User"}!`, "success");
+      
+      // Beri jeda sedikit agar notifikasi terlihat sebelum pindah layar
+      setTimeout(() => {
+        navigation.replace("Dashboard");
+      }, 1500);
+
     } catch (error) {
       console.error("❌ Login error:", error);
-      Alert.alert("Error", "Tidak dapat terhubung ke server!");
+      showToast("Tidak dapat terhubung ke server!", "error");
     } finally {
-      setLoading(false);
+      // Loading dimatikan di setTimeout sukses atau langsung jika error
+      if (toastType !== "success") setLoading(false);
     }
   };
 
   return (
     <LinearGradient colors={["#FFFFFF", "#F3F7FB"]} style={styles.container}>
+      
+      {/* 🔔 CUSTOM TOAST NOTIFICATION COMPONENT */}
+      <Animated.View 
+        style={[
+            styles.toastContainer, 
+            { transform: [{ translateY: slideAnim }] },
+            toastType === "error" ? styles.toastError : styles.toastSuccess
+        ]}
+      >
+        <Ionicons 
+            name={toastType === "success" ? "checkmark-circle" : "alert-circle"} 
+            size={24} 
+            color="#fff" 
+        />
+        <View style={{marginLeft: 10, flex: 1}}>
+            <Text style={styles.toastTitle}>
+                {toastType === "success" ? "Berhasil Masuk" : "Gagal"}
+            </Text>
+            <Text style={styles.toastMessage}>{toastMessage}</Text>
+        </View>
+      </Animated.View>
+
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.keyboardView}
@@ -219,6 +255,42 @@ export default function LoginScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  
+  // TOAST STYLES
+  toastContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 20,
+    right: 20,
+    zIndex: 100,
+    padding: 15,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+    elevation: 10,
+  },
+  toastSuccess: {
+    backgroundColor: "#10B981", // Hijau Modern
+  },
+  toastError: {
+    backgroundColor: "#EF4444", // Merah Modern
+  },
+  toastTitle: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  toastMessage: {
+    color: '#E5E7EB',
+    fontSize: 12,
+    marginTop: 2,
+    fontWeight: '500'
+  },
+
   keyboardView: { flex: 1 },
   scrollContainer: {
     flexGrow: 1,
