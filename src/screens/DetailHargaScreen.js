@@ -1,5 +1,5 @@
 // ============================
-// 📱 DetailHargaScreen.js (FIXED FOR HISTORY)
+// 📱 DetailHargaScreen.js (FINAL: NOTIF HAPUS + HEADER KIRI)
 // ============================
 import React, { useState, useMemo, useCallback } from "react";
 import {
@@ -10,6 +10,10 @@ import { useRoute, useNavigation, useFocusEffect } from "@react-navigation/nativ
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import NetInfo from "@react-native-community/netinfo";
+import { LinearGradient } from "expo-linear-gradient"; 
+
+// ✅ 1. Import Helper Notifikasi
+import { pushNotification } from "../../src/screens/NotificationScreen";
 
 import {
   deleteLocalPrice,
@@ -23,7 +27,15 @@ import {
 // ========================
 const BASE_URL = "http://103.100.27.57:5100"; 
 
-// Helper Tanggal yang lebih aman
+// Helper Tanggal Aman
+const safeDate = (dateInput) => {
+    if (!dateInput) return new Date();
+    if (typeof dateInput === 'string' && dateInput.includes(' ')) {
+        return new Date(dateInput.replace(' ', 'T'));
+    }
+    return new Date(dateInput);
+};
+
 const getYMD = (date) => {
   if (!date) return new Date().toISOString().split("T")[0];
   const d = new Date(date);
@@ -51,7 +63,6 @@ export default function DetailHargaScreen() {
   const route = useRoute();
   const navigation = useNavigation();
 
-  // Ambil params. nama_komoditas sangat penting untuk Riwayat Hapus
   const { commodity_id, nama_komoditas, selectedDate, satuan } = route.params || {};
 
   const [currentDate, setCurrentDate] = useState(selectedDate ? new Date(selectedDate) : new Date());
@@ -70,8 +81,6 @@ export default function DetailHargaScreen() {
   const fetchData = useCallback(async (isRefresh = false) => {
     if (!isRefresh) setLoading(true);
     
-    console.log(`🔍 Fetching: ID=${commodity_id}, Date=${targetDateStr}`);
-
     try {
       const rows = await getDetailHargaForScreen(commodity_id, targetDateStr);
       
@@ -84,19 +93,24 @@ export default function DetailHargaScreen() {
 
       const parsedData = rows.map(r => {
           const isSynced = (r.synced == 1); 
+          const dateObj = safeDate(r.created_at);
+
+          const unitCandidates = [r.unit_input, r.unit_name, r.price_unit, r.unit, r.master_unit, satuan];
+          const validUnit = unitCandidates.find(u => u && u !== "null" && u !== "" && u !== "undefined");
+
           return {
               ...r,
               uiId: r.id, 
               isSynced: isSynced,
               priceNum: Number(r.price || 0),
-              timeMs: new Date(r.created_at).getTime(),
+              dateObj: dateObj,
+              timeMs: dateObj.getTime(),
               imageSource: resolveImageSource(r.local_image, r.image || r.server_image),
-              finalUnit: r.unit_input || r.unit || r.master_unit || satuan || "Kg",
+              finalUnit: validUnit || "Kg",
               finalCategory: r.kategori_nama || r.name_category || "-"
           };
       });
 
-      // LOGIKA MERGE
       const syncedItems = parsedData.filter(d => d.isSynced);
       const localItems = parsedData.filter(d => !d.isSynced);
       let finalData = [...syncedItems];
@@ -107,10 +121,7 @@ export default function DetailHargaScreen() {
               const timeDiff = Math.abs(serverItem.timeMs - localItem.timeMs);
               return samePrice && timeDiff < 300000;
           });
-
-          if (!isDuplicate) {
-              finalData.push(localItem);
-          }
+          if (!isDuplicate) finalData.push(localItem);
       });
 
       finalData.sort((a, b) => b.timeMs - a.timeMs);
@@ -190,40 +201,42 @@ export default function DetailHargaScreen() {
   };
 
   // ========================
-  // 🗑️ HANDLE DELETE (FIXED)
+  // 🗑️ DELETE LOGIC (UPDATED)
   // ========================
   const handleBulkDelete = () => {
-    Alert.alert("Hapus Data", `Hapus ${selectedIds.length} item? Data akan masuk ke Riwayat Hapus.`, [
+    Alert.alert("Hapus Data", `Hapus ${selectedIds.length} item?`, [
       { text: "Batal", style: "cancel" },
       {
         text: "Hapus", style: "destructive",
         onPress: async () => {
-            // Loop item yang akan dihapus
+            let deleteCount = 0;
             for (const item of displayItems) {
                 if (selectedIds.includes(item.uiId) && !item.isSynced) {
-                    
-                    // 1. SIAPKAN DATA LENGKAP UNTUK RIWAYAT
-                    // Kita kirim object ini ke fungsi delete di database agar dicatat dulu sebelum dihapus
                     const dataForHistory = {
                         ...item,
-                        id: item.uiId, // Pastikan ID terbawa
-                        name_commodity: nama_komoditas, // PENTING: Nama dari params
+                        id: item.uiId,
+                        name_commodity: nama_komoditas,
                         name_category: item.finalCategory || "Umum",
                         price: item.priceNum,
                         unit: item.finalUnit,
                         image: item.image || item.server_image,
                         local_image: item.local_image,
-                        // Gunakan tanggal yang sedang dibuka agar muncul di filter tanggal yang benar
                         tanggal: targetDateStr 
                     };
-
-                    console.log("🗑️ Deleting & Archiving:", dataForHistory.name_commodity);
-                    
-                    // 2. PANGGIL FUNGSI DELETE DENGAN DATA LENGKAP
-                    // Pastikan fungsi deleteLocalPrice di database.js menerima parameter ke-2 (itemData)
                     await deleteLocalPrice(item.uiId, dataForHistory);
+                    deleteCount++;
                 }
             }
+
+            // ✅ TRIGGER NOTIFIKASI HAPUS (MERAH)
+            if (deleteCount > 0) {
+              await pushNotification({
+                type: "delete",
+                title: "Data Dihapus",
+                message: `${deleteCount} data ${nama_komoditas} berhasil dihapus.`,
+              });
+            }
+
             setSelectionMode(false);
             setSelectedIds([]);
             fetchData(true);
@@ -234,15 +247,35 @@ export default function DetailHargaScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={[styles.header, selectionMode && styles.headerSelection]}>
-        <TouchableOpacity onPress={() => selectionMode ? (setSelectionMode(false), setSelectedIds([])) : navigation.goBack()}>
+      
+      {/* ✅ HEADER GRADIENT (UPDATED) */}
+      <LinearGradient
+        colors={selectionMode ? ["#EF4444", "#991B1B"] : ["#174A6A", "#0F172A"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.header}
+      >
+        <TouchableOpacity 
+            onPress={() => selectionMode ? (setSelectionMode(false), setSelectedIds([])) : navigation.goBack()}
+            style={{ padding: 4 }}
+        >
           <Ionicons name={selectionMode ? "close" : "arrow-back"} size={26} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{selectionMode ? `${selectedIds.length} Dipilih` : "Detail & Edit Harga"}</Text>
-        {selectionMode ? (
-          <TouchableOpacity onPress={handleBulkDelete}><Ionicons name="trash" size={26} color="#fff" /></TouchableOpacity>
-        ) : <View style={{ width: 26 }} />}
-      </View>
+        
+        {/* ✅ Title dipindah ke kiri (sebelah arrow) */}
+        <Text style={styles.headerTitle}>
+            {selectionMode ? `${selectedIds.length} Dipilih` : "Detail Harga"}
+        </Text>
+        
+        {/* Spacer untuk mendorong icon tong sampah ke kanan */}
+        <View style={{ flex: 1 }} />
+
+        {selectionMode && (
+          <TouchableOpacity onPress={handleBulkDelete} style={{ padding: 4 }}>
+            <Ionicons name="trash" size={26} color="#fff" />
+          </TouchableOpacity>
+        )}
+      </LinearGradient>
 
       <View style={styles.dateBar}>
         <Text style={styles.dateText}>Tanggal: <Text style={{ fontWeight: "800", color:'#334155' }}>{formatIndoDate(currentDate)}</Text></Text>
@@ -272,7 +305,7 @@ export default function DetailHargaScreen() {
             const isSelected = selectedIds.includes(item.uiId);
             return (
               <TouchableOpacity
-                key={`row-${item.uiId}-${item.isSynced}`}
+                key={`row-${item.uiId}-${item.timeMs}`} 
                 activeOpacity={0.7}
                 onLongPress={() => !item.isSynced && (setSelectionMode(true), setSelectedIds([item.uiId]))}
                 onPress={() => handleItemPress(item)}
@@ -298,10 +331,11 @@ export default function DetailHargaScreen() {
                       Rp {item.priceNum.toLocaleString("id-ID")}
                       <Text style={styles.itemUnit}> / {item.finalUnit}</Text>
                     </Text>
+                    
                     <View style={styles.metaRow}>
                         <Ionicons name="time-outline" size={12} color="#64748B" />
                         <Text style={styles.time}>
-                        {new Date(item.created_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB
+                            {item.dateObj.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })} WIB
                         </Text>
                     </View>
                     
@@ -339,29 +373,22 @@ export default function DetailHargaScreen() {
   );
 }
 
-// Styles Tetap Sama
+// Styles
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8FAFC" },
   header: {
-    backgroundColor: "#174A6A",
     paddingTop: 50,
     paddingBottom: 15,
     paddingHorizontal: 20,
     flexDirection: "row",
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 4,
+  
   },
-  headerSelection: { backgroundColor: "#EF4444" },
   headerTitle: {
     color: "#fff",
     fontSize: 18,
     fontWeight: "800",
-    flex: 1,
-    textAlign: "center",
+    marginLeft: 15, // ✅ Geser ke kiri
     letterSpacing: 0.5,
   },
   dateBar: {

@@ -1,5 +1,5 @@
 // ===============================
-// 📱 DashboardScreen.js (FINAL — NO NOTIF + TIME FIX)
+// 📱 DashboardScreen.js (STYLE ASLI + AUTO SYNC NOTIF)
 // ===============================
 import React, { useEffect, useState, useCallback } from "react";
 import {
@@ -17,8 +17,10 @@ import NetInfo from "@react-native-community/netinfo";
 import { useFocusEffect } from "@react-navigation/native";
 
 import BottomNav from "../components/BottomNav";
-import { initDatabase } from "../../config/database";
 
+// ✅ Import Tambahan untuk Logic Sync
+import { initDatabase, getDatabase } from "../../config/database";
+import { pushNotification } from "../../src/screens/NotificationScreen";
 
 // ===============================
 // Helper Waktu Lokal (ANTI UTC)
@@ -30,7 +32,7 @@ const getTodayLocalDate = () => {
 };
 
 // ===============================
-// 🔧 FIX PARSE TANGGAL (ANTI DOUBLE UTC)
+// 🔧 FIX PARSE TANGGAL
 // ===============================
 const parseLocalDate = (iso) => {
   if (!iso) return null;
@@ -72,6 +74,50 @@ export default function DashboardScreen({ navigation }) {
   });
 
   // ===============================
+  // 🔄 LOGIKA AUTO SYNC (OFFLINE -> ONLINE)
+  // ===============================
+  const syncOfflineData = async () => {
+    try {
+      const db = await getDatabase();
+      // Cari data yang belum tersinkron (is_synced = 0)
+      const unsyncedData = await db.getAllAsync("SELECT * FROM prices WHERE is_synced = 0");
+
+      if (unsyncedData && unsyncedData.length > 0) {
+        for (const item of unsyncedData) {
+          try {
+            // Upload ke Server
+            const response = await fetch("http://103.100.27.57:5000/api/prices", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                commodity_id: item.commodity_id,
+                price: item.price,
+              }),
+            });
+
+            if (response.ok) {
+              // Jika sukses, update status lokal jadi 1
+              await db.runAsync("UPDATE prices SET is_synced = 1 WHERE id = ?", [item.id]);
+
+              // 🔥 PUSH NOTIFIKASI "TERSINKRON" (BIRU)
+              await pushNotification({
+                type: "synced",
+                title: "Data Tersinkronisasi",
+                message: `Harga Rp ${formatHarga(item.price)} berhasil diupload ke server.`,
+              });
+            }
+          } catch (err) {
+            console.log("Gagal upload item:", item.id);
+          }
+        }
+        reloadDashboard(); 
+      }
+    } catch (e) {
+      console.log("Sync error:", e);
+    }
+  };
+
+  // ===============================
   // RELOAD DASHBOARD (LOG LOKAL)
   // ===============================
   const reloadDashboard = useCallback(async () => {
@@ -94,12 +140,18 @@ export default function DashboardScreen({ navigation }) {
   }, []);
 
   // ===============================
-  // Connectivity
+  // Connectivity Listener
   // ===============================
   useEffect(() => {
-    const unsub = NetInfo.addEventListener((s) =>
-      setIsConnected(Boolean(s.isConnected))
-    );
+    const unsub = NetInfo.addEventListener((state) => {
+      const online = Boolean(state.isConnected);
+      setIsConnected(online);
+
+      // ✅ JIKA INTERNET NYALA, JALANKAN SYNC
+      if (online) {
+        syncOfflineData();
+      }
+    });
     return () => unsub();
   }, []);
 
@@ -158,7 +210,8 @@ export default function DashboardScreen({ navigation }) {
       </View>
 
       <View style={styles.rightSection}>
-        <Text style={styles.itemCategory} numberOfLines={1}>
+        {/* ✅ PERBAIKAN: numberOfLines dihapus agar kategori terlihat lengkap */}
+        <Text style={styles.itemCategory}>
           {item.name_category || "Lainnya"}
         </Text>
       </View>
@@ -262,7 +315,7 @@ export default function DashboardScreen({ navigation }) {
 }
 
 // ===============================
-// Styles 
+// Styles (ORIGINAL - NO CHANGE)
 // ===============================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F3F4F6" },

@@ -1,5 +1,5 @@
 // ===============================
-// 📱 InputScreen.js (FULL FINAL — NOTIF + STAY SCREEN FIX)
+// 📱 InputScreen.js (STYLE ASLI + HEADER GRADASI + SMART NOTIF)
 // ===============================
 import React, { useEffect, useState, useRef } from "react";
 import {
@@ -12,12 +12,15 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
-  Alert,
   Modal,
   Animated,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+
+// ✅ 1. Import Tambahan (Gradasi & NetInfo)
+import { LinearGradient } from "expo-linear-gradient";
+import NetInfo from "@react-native-community/netinfo";
 
 import {
   getCategories,
@@ -26,7 +29,7 @@ import {
   addPrice,
 } from "../../config/database";
 
-// 🔔 IMPORT NOTIFIKASI
+// 🔔 Import Notifikasi
 import { pushNotification } from "../../src/screens/NotificationScreen";
 
 export default function InputScreen({ navigation }) {
@@ -49,7 +52,7 @@ export default function InputScreen({ navigation }) {
   const priceRef = useRef(null);
 
   // ===============================
-  // UTIL WAKTU LOKAL (REALTIME)
+  // UTIL WAKTU LOKAL
   // ===============================
   const getLocalDateTime = () => {
     const now = new Date();
@@ -110,12 +113,7 @@ export default function InputScreen({ navigation }) {
 
       all = all.map((c) => ({
         ...c,
-        category_id:
-          Number(
-            c.category_id ??
-              c.id_category ??
-              c.category?.id_category
-          ) || null,
+        category_id: Number(c.category_id ?? c.id_category ?? c.category?.id_category) || null,
       }));
 
       setCommodities(all);
@@ -139,7 +137,7 @@ export default function InputScreen({ navigation }) {
   const rupiahToNumber = (val) => Number(val.replace(/\./g, "")) || 0;
 
   // ===============================
-  // CATEGORY & COMMODITY SELECTION
+  // INTERAKSI GRID
   // ===============================
   const toggleCategory = (cat) => {
     const exists = selectedCategories.some((c) => c.id_category === cat.id_category);
@@ -167,10 +165,7 @@ export default function InputScreen({ navigation }) {
         setUnit(local.name_unit);
       } else {
         const db = await getDatabase();
-        const row = await db.getFirstAsync(
-          "SELECT name_unit FROM units WHERE id = ?",
-          [item.unit_id]
-        );
+        const row = await db.getFirstAsync("SELECT name_unit FROM units WHERE id = ?", [item.unit_id]);
         setUnit(row?.name_unit || "");
       }
     } else {
@@ -185,7 +180,7 @@ export default function InputScreen({ navigation }) {
   };
 
   // ===============================
-  // SUBMIT (SIMPAN + NOTIFIKASI)
+  // 🔥 HANDLE SUBMIT (Dengan Smart Notif)
   // ===============================
   const handleSubmit = async () => {
     if (!selectedCommodity || !price) return;
@@ -193,24 +188,19 @@ export default function InputScreen({ navigation }) {
     setLoading(true);
     try {
       const priceNumeric = rupiahToNumber(price);
-      const namaKomoditas =
-        selectedCommodity.name || selectedCommodity.name_commodity;
+      const namaKomoditas = selectedCommodity.name || selectedCommodity.name_commodity;
 
-      // 1️⃣ SIMPAN KE SQLITE
+      // 1. Simpan ke Database Lokal (SQLite)
       await addPrice(
         selectedCommodity.id_commodity,
         selectedCommodity.category_id,
         priceNumeric
       );
 
-      // 2️⃣ WAKTU LOKAL
+      // 2. Simpan ke Log Dashboard (AsyncStorage)
       const waktu = getLocalDateTime();
-
-      // 3️⃣ LOG DASHBOARD
-      const catAktif = categories.find(
-        (c) => Number(c.id_category) === Number(selectedCommodity.category_id)
-      );
-
+      const catAktif = categories.find((c) => Number(c.id_category) === Number(selectedCommodity.category_id));
+      
       const aktivitasBaru = {
         id_temp: Date.now().toString(),
         source: "LOCAL_INPUT",
@@ -226,26 +216,33 @@ export default function InputScreen({ navigation }) {
 
       const logLama = await AsyncStorage.getItem("dashboard_log");
       const logs = logLama ? JSON.parse(logLama) : [];
-      await AsyncStorage.setItem(
-        "dashboard_log",
-        JSON.stringify([aktivitasBaru, ...logs].slice(0, 20))
-      );
+      await AsyncStorage.setItem("dashboard_log", JSON.stringify([aktivitasBaru, ...logs].slice(0, 20)));
 
-      // 🔔 NOTIFIKASI (DITAMBAH NAMA KOMODITAS)
-      await pushNotification({
-        type: "success",
-        title: "Input Berhasil",
-        message: `${namaKomoditas} berhasil disimpan`,
-        data: {
-          name_commodity: namaKomoditas,
-          price: priceNumeric,
-          category: catAktif?.name_category || "Lainnya",
-        },
-      });
+      // ✅ 3. LOGIKA NOTIFIKASI PINTAR (Check Internet)
+      const networkState = await NetInfo.fetch();
+      
+      if (networkState.isConnected) {
+        // ONLINE: Kirim Notif Sukses (Hijau)
+        await pushNotification({
+          type: "success",
+          title: "Input Berhasil",
+          message: `${namaKomoditas} berhasil diupload ke server.`,
+          data: { name_commodity: namaKomoditas, price: priceNumeric }
+        });
+      } else {
+        // OFFLINE: Kirim Notif Offline (Orange)
+        await pushNotification({
+          type: "offline",
+          title: "Disimpan Offline",
+          message: `Internet mati. ${namaKomoditas} disimpan di local.`,
+          data: { name_commodity: namaKomoditas, price: priceNumeric }
+        });
+      }
 
-      // ✅ POPUP
+      // 4. Tampilkan Popup
       showPopup("success", `${namaKomoditas} tersimpan`);
       setPrice("");
+      
     } catch (e) {
       console.error(e);
       showPopup("error", "Gagal menyimpan data");
@@ -260,7 +257,7 @@ export default function InputScreen({ navigation }) {
   };
 
   // ===============================
-  // RENDER
+  // RENDER UI
   // ===============================
   const filteredCommodities = commodities.filter((c) =>
     selectedCategories.some((cat) => c.category_id === cat.id_category)
@@ -275,22 +272,25 @@ export default function InputScreen({ navigation }) {
       style={{ flex: 1 }}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
-      {/* HEADER */}
-      <View style={styles.header}>
+      {/* ✅ HEADER GRADASI (Tanpa mengubah layout lain) */}
+      <LinearGradient
+        colors={["#174A6A", "#0F172A"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.header}
+      >
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Tambah Data Harga</Text>
-      </View>
+      </LinearGradient>
 
       <ScrollView ref={scrollRef} contentContainerStyle={styles.page}>
         {/* KATEGORI */}
         <Text style={styles.title}>Pilih Kategori</Text>
         <View style={styles.grid}>
           {categories.map((cat) => {
-            const active = selectedCategories.some(
-              (c) => c.id_category === cat.id_category
-            );
+            const active = selectedCategories.some((c) => c.id_category === cat.id_category);
             return (
               <TouchableOpacity
                 key={cat.id_category}
@@ -298,17 +298,9 @@ export default function InputScreen({ navigation }) {
                 onPress={() => toggleCategory(cat)}
               >
                 {safeImage(cat.image) && (
-                  <Image
-                    source={safeImage(cat.image)}
-                    style={{ width: 40, height: 40 }}
-                  />
+                  <Image source={safeImage(cat.image)} style={{ width: 40, height: 40 }} />
                 )}
-                <Text
-                  style={[
-                    styles.boxLabel,
-                    { color: active ? "#fff" : "#174A6A" },
-                  ]}
-                >
+                <Text style={[styles.boxLabel, { color: active ? "#fff" : "#174A6A" }]}>
                   {cat.name_category}
                 </Text>
               </TouchableOpacity>
@@ -319,13 +311,10 @@ export default function InputScreen({ navigation }) {
         {/* KOMODITAS */}
         {filteredCommodities.length > 0 && (
           <>
-            <Text style={[styles.title, { marginTop: 15 }]}>
-              Pilih Komoditas
-            </Text>
+            <Text style={[styles.title, { marginTop: 15 }]}>Pilih Komoditas</Text>
             <View style={styles.grid}>
               {filteredCommodities.map((item) => {
-                const active =
-                  selectedCommodity?.id_commodity === item.id_commodity;
+                const active = selectedCommodity?.id_commodity === item.id_commodity;
                 return (
                   <TouchableOpacity
                     key={item.id_commodity}
@@ -333,17 +322,9 @@ export default function InputScreen({ navigation }) {
                     onPress={() => handleSelectCommodity(item)}
                   >
                     {safeImage(item.image) && (
-                      <Image
-                        source={safeImage(item.image)}
-                        style={{ width: 50, height: 40 }}
-                      />
+                      <Image source={safeImage(item.image)} style={{ width: 50, height: 40, borderRadius: 4 }} />
                     )}
-                    <Text
-                      style={[
-                        styles.boxLabel,
-                        { color: active ? "#fff" : "#174A6A" },
-                      ]}
-                    >
+                    <Text style={[styles.boxLabel, { color: active ? "#fff" : "#174A6A" }]}>
                       {item.name || item.name_commodity}
                     </Text>
                   </TouchableOpacity>
@@ -353,7 +334,7 @@ export default function InputScreen({ navigation }) {
           </>
         )}
 
-        {/* INPUT */}
+        {/* INPUT FORM */}
         {selectedCommodity && (
           <View ref={priceRef} style={{ marginTop: 25 }}>
             <Text style={styles.title}>Harga & Satuan</Text>
@@ -396,15 +377,9 @@ export default function InputScreen({ navigation }) {
       {/* POPUP */}
       <Modal transparent visible={popup.visible} animationType="fade">
         <View style={styles.popupOverlay}>
-          <Animated.View
-            style={[styles.popupBox, { transform: [{ scale: popupAnim }] }]}
-          >
+          <Animated.View style={[styles.popupBox, { transform: [{ scale: popupAnim }] }]}>
             <Ionicons
-              name={
-                popup.type === "success"
-                  ? "checkmark-circle"
-                  : "close-circle"
-              }
+              name={popup.type === "success" ? "checkmark-circle" : "close-circle"}
               size={46}
               color={popup.type === "success" ? "#2ecc71" : "#e74c3c"}
             />
@@ -416,9 +391,10 @@ export default function InputScreen({ navigation }) {
   );
 }
 
+// STYLE ASLI ANDA (Hanya header disesuaikan agar transparan untuk gradasi)
 const styles = StyleSheet.create({
   header: {
-    backgroundColor: "#174A6A",
+    // backgroundColor dihapus agar gradasi terlihat
     paddingTop: 50,
     paddingBottom: 16,
     paddingHorizontal: 16,

@@ -362,7 +362,7 @@ export const syncAllPricesByDate = async (dateStr) => {
 };
 
 // ==============================
-// ADD PRICE (FIXED - NO DUPLICATE)
+// ADD PRICE
 // ==============================
 
 export const addPrice = async (comId, catId, price) => {
@@ -371,10 +371,25 @@ export const addPrice = async (comId, catId, price) => {
   const userId = Number(await AsyncStorage.getItem("user_id"));
   const marketId = Number(await AsyncStorage.getItem("market_id"));
 
-  const now = new Date().toISOString();
-  const dateOnly = now.split("T")[0];
+  // 🔥 PERBAIKAN TANGGAL MULAI DI SINI 🔥
+  // Kita ambil waktu local device, bukan UTC
+  const nowObj = new Date(); 
+  
+  const year = nowObj.getFullYear();
+  const month = String(nowObj.getMonth() + 1).padStart(2, '0'); // +1 karena Januari = 0
+  const day = String(nowObj.getDate()).padStart(2, '0');
+  
+  // Hasil: "2024-05-25" (Sesuai tanggal HP user)
+  const dateOnly = `${year}-${month}-${day}`; 
+  
+  // created_at tetap ISO agar presisi detiknya tersimpan standar
+  const now = nowObj.toISOString();
+  // 🔥 PERBAIKAN SELESAI 🔥
 
-  // 🛡️ 1. CEK APAKAH SUDAH ADA DATA HARI INI?
+  // ---------------------------------------------------------
+  // LOGIKA KE BAWAH TETAP SAMA SEPERTI SEBELUMNYA
+  // ---------------------------------------------------------
+
   const existing = await dbInst.getFirstAsync(
     `SELECT id FROM local_prices WHERE commodity_id = ? AND date = ? AND synced = 0`,
     [comId, dateOnly]
@@ -382,12 +397,10 @@ export const addPrice = async (comId, catId, price) => {
 
   if (existing) {
     console.log("⚠️ Data sudah ada, melakukan update harga saja.");
-    // Opsional: Update harga jika user input ulang di hari yang sama
     await updateLocalPrice(existing.id, { price: price, updated_at: now });
     return { ok: true, message: "Data diperbarui (sebelumnya sudah ada)" };
   }
 
-  // ... Lanjut logika lama ...
   const comm = await dbInst.getFirstAsync(
     `SELECT name_commodity, unit_id FROM commodities WHERE id_commodity = ?`,
     [comId]
@@ -415,7 +428,7 @@ export const addPrice = async (comId, catId, price) => {
           user_id: userId,
           market_id: marketId,
           price,
-          date: dateOnly,
+          date: dateOnly, // Mengirim tanggal yang benar ke server
         }),
       });
       if (res.ok) synced = 1;

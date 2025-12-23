@@ -1,3 +1,6 @@
+// ==========================================
+// 🔔 NotificationScreen.js (FINAL VERSION)
+// ==========================================
 import React, { useEffect, useState } from "react";
 import {
   View,
@@ -9,40 +12,55 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { LinearGradient } from "expo-linear-gradient"; // ✅ Import Gradasi
 
 // ======================
-// Global real-time handler
+// 1. GLOBAL HELPER (Jantung Notifikasi)
 // ======================
+// Array untuk menampung fungsi update dari screen yang sedang aktif
 let notificationListeners = [];
 
-export const pushNotification = async ({ type, title, message }) => {
+/**
+ * Fungsi untuk memanggil notifikasi dari file mana saja
+ * @param {object} param0 { type, title, message, data }
+ */
+export const pushNotification = async ({ type, title, message, data = null }) => {
   try {
     const stored = await AsyncStorage.getItem("notifications");
     const notifList = stored ? JSON.parse(stored) : [];
 
     const newNotif = {
-      id: Date.now(),
-      type,
+      id: Date.now(),       // ID unik
+      type,                 // 'success' | 'offline' | 'synced' | 'delete' | 'error'
       title,
       message,
+      data,                 // Optional: simpan data terkait (misal ID komoditas)
       timestamp: new Date().toISOString(),
+      read: false,
     };
 
+    // Tambah notif baru ke paling atas
     const updatedList = [newNotif, ...notifList];
-    await AsyncStorage.setItem("notifications", JSON.stringify(updatedList));
+    
+    // Simpan limit 50 notifikasi terakhir saja agar memori aman
+    const limitedList = updatedList.slice(0, 50); 
+    
+    await AsyncStorage.setItem("notifications", JSON.stringify(limitedList));
 
-    notificationListeners.forEach((fn) => fn(updatedList));
+    // Kabari listener agar UI update realtime
+    notificationListeners.forEach((fn) => fn(limitedList));
   } catch (err) {
     console.error("❌ Gagal push notifikasi:", err);
   }
 };
 
 // ======================
-// NotificationScreen
+// 2. MAIN COMPONENT UI
 // ======================
 export default function NotificationScreen({ navigation }) {
   const [notifications, setNotifications] = useState([]);
 
+  // Load data awal
   const loadNotifications = async () => {
     try {
       const stored = await AsyncStorage.getItem("notifications");
@@ -55,196 +73,169 @@ export default function NotificationScreen({ navigation }) {
   useEffect(() => {
     loadNotifications();
 
+    // Register Listener (Agar saat ada notif baru, layar ini auto-refresh)
     const listener = (newList) => setNotifications(newList);
     notificationListeners.push(listener);
 
     return () => {
+      // Unregister saat keluar screen
       notificationListeners = notificationListeners.filter((fn) => fn !== listener);
     };
   }, []);
 
+  // ✅ LOGIKA IKON & WARNA SESUAI TIPE
   const getIcon = (type) => {
     switch (type) {
-      case "success":
-        return <Ionicons name="checkmark-circle-outline" size={24} color="#22c55e" />;
-      case "error":
-        return <Ionicons name="close-circle-outline" size={24} color="#ef4444" />;
-      case "info":
-        return <Ionicons name="information-circle-outline" size={24} color="#3b82f6" />;
+      case "success": // Input Online (Berhasil ke Server)
+        return <Ionicons name="checkmark-circle" size={28} color="#22c55e" />;
+      
+      case "synced": // ✅ BARU: Sinkronisasi Otomatis
+        return <Ionicons name="cloud-done" size={28} color="#3b82f6" />; // Biru
+      
+      case "offline": // Input Offline (Disimpan Lokal)
+        return <Ionicons name="cloud-offline" size={28} color="#f97316" />; // Orange
+      
+      case "delete":  // ✅ BARU: Hapus Data
+        return <Ionicons name="trash" size={28} color="#ef4444" />; // Merah
+      
+      case "error": 
+        return <Ionicons name="alert-circle" size={28} color="#ef4444" />;
+      
+      case "edit":  // ✅ BARU: Edit Data
+        return <Ionicons name="pencil" size={28} color="#a855f7" />; // Ungu  
+
       default:
-        return <Ionicons name="notifications-outline" size={24} color="#6b7280" />;
+        return <Ionicons name="information-circle" size={28} color="#64748B" />;
     }
   };
 
-  // ======================
-  // FORMAT WAKTU
-  // ======================
+  // Format Waktu
   const formatTime = (iso) => {
     if (!iso) return "";
-
     const date = new Date(iso);
-    const months = [
-      "januari",
-      "februari",
-      "maret",
-      "april",
-      "mei",
-      "juni",
-      "juli",
-      "agustus",
-      "september",
-      "oktober",
-      "november",
-      "desember",
-    ];
-
-    return `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear()}, ${String(
-      date.getHours()
-    ).padStart(2, "0")}.${String(date.getMinutes()).padStart(2, "0")}`;
+    return date.toLocaleDateString("id-ID", { day: 'numeric', month: 'short' }) + 
+           ", " + 
+           date.toLocaleTimeString("id-ID", { hour: '2-digit', minute: '2-digit' });
   };
 
-  // ======================
-  // HAPUS NOTIFIKASI
-  // ======================
-  const handleDelete = (id) => {
-    Alert.alert(
-      "Hapus Notifikasi",
-      "Apakah Anda yakin ingin menghapus notifikasi ini?",
-      [
-        { text: "Batal", style: "cancel" },
-        {
-          text: "Hapus",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              const stored = await AsyncStorage.getItem("notifications");
-              const notifList = stored ? JSON.parse(stored) : [];
-              const updated = notifList.filter((n) => n.id !== id);
-
-              await AsyncStorage.setItem("notifications", JSON.stringify(updated));
-              setNotifications(updated);
-              notificationListeners.forEach((fn) => fn(updated));
-            } catch (err) {
-              console.error("❌ Gagal hapus notifikasi:", err);
-            }
-          },
+  // Hapus Satu Riwayat (Long Press)
+  const handleDeleteHistory = (id) => {
+    Alert.alert("Hapus Log", "Hapus catatan aktivitas ini?", [
+      { text: "Batal", style: "cancel" },
+      {
+        text: "Hapus", style: "destructive",
+        onPress: async () => {
+            const updated = notifications.filter((n) => n.id !== id);
+            await AsyncStorage.setItem("notifications", JSON.stringify(updated));
+            setNotifications(updated);
+            notificationListeners.forEach((fn) => fn(updated));
         },
-      ]
-    );
+      },
+    ]);
   };
 
   return (
     <View style={styles.container}>
-      {/* HEADER */}
-      <View style={styles.header}>
+      {/* ✅ HEADER GRADASI */}
+      <LinearGradient
+        colors={["#174A6A", "#0F172A"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.header}
+      >
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={26} color="#fff" />
+          <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Notifikasi</Text>
-      </View>
+        <Text style={styles.headerTitle}>Riwayat Notifikasi</Text>
+      </LinearGradient>
 
-      {/* BODY */}
+      {/* BODY LIST */}
       <ScrollView style={styles.body} showsVerticalScrollIndicator={false}>
         {notifications.length > 0 ? (
           notifications.map((notif) => (
             <TouchableOpacity
               key={notif.id}
-              onPress={() =>
-                navigation.navigate("DetailHarga", {
-                  notification: notif,
-                })
-              }
-              onLongPress={() => handleDelete(notif.id)}
+              activeOpacity={0.7}
+              onLongPress={() => handleDeleteHistory(notif.id)}
               style={[
                 styles.notifCard,
-                notif.type === "error" && { borderLeftColor: "#ef4444" },
-                notif.type === "info" && { borderLeftColor: "#3b82f6" },
+                // Border warna-warni sesuai tipe
+                notif.type === "success" && { borderLeftColor: "#22c55e" },
+                notif.type === "synced"  && { borderLeftColor: "#3b82f6" }, // Biru
+                notif.type === "offline" && { borderLeftColor: "#f97316" },
+                notif.type === "delete"  && { borderLeftColor: "#ef4444" },
+                notif.type === "error"   && { borderLeftColor: "#ef4444" },
+                notif.type === "edit"    && { borderLeftColor: "#a855f7" },
               ]}
             >
-              <View style={styles.icon}>{getIcon(notif.type)}</View>
+              <View style={styles.iconContainer}>{getIcon(notif.type)}</View>
+              
               <View style={styles.textContainer}>
-                <Text style={styles.notifTitle}>{notif.title || ""}</Text>
-                <Text style={styles.notifMessage}>{notif.message || ""}</Text>
+                <Text style={styles.notifTitle}>{notif.title}</Text>
+                <Text style={styles.notifMessage}>{notif.message}</Text>
                 <Text style={styles.notifTime}>{formatTime(notif.timestamp)}</Text>
               </View>
             </TouchableOpacity>
           ))
         ) : (
-          <Text style={styles.emptyText}>Belum ada notifikasi</Text>
+          <View style={styles.emptyContainer}>
+            <Ionicons name="notifications-off-outline" size={60} color="#cbd5e1" />
+            <Text style={styles.emptyText}>Tidak ada notifikasi baru</Text>
+          </View>
         )}
+        <View style={{ height: 40 }} />
       </ScrollView>
     </View>
   );
 }
 
 // ======================
-// Styles
+// STYLES
 // ======================
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#F3F4F6" },
-
+  container: { flex: 1, backgroundColor: "#F8FAFC" },
+  
   header: {
+    paddingTop: 50,
+    paddingBottom: 15,
+    paddingHorizontal: 20,
     flexDirection: "row",
     alignItems: "center",
-    paddingTop: 50,
-    paddingBottom: 16,
-    paddingHorizontal: 16,
-    borderRadius: 16,
-    backgroundColor: "#174A6A",
+    elevation: 4,
   },
-
-  backBtn: {
-    marginRight: 12,
-  },
-
-  headerTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "700",
-  },
-
-  body: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-
+  
+  backBtn: { marginRight: 15 },
+  headerTitle: { color: "#fff", fontSize: 18, fontWeight: "bold", letterSpacing: 0.5 },
+  
+  body: { flex: 1, padding: 16 },
+  
   notifCard: {
     flexDirection: "row",
-    alignItems: "flex-start",
     backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 12,
+    borderRadius: 12,
+    padding: 16,
     marginBottom: 12,
-    elevation: 1,
+    elevation: 3, // Shadow Android
+    shadowColor: "#64748B", // Shadow iOS
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
     borderLeftWidth: 5,
-    borderLeftColor: "#22c55e",
+    borderLeftColor: "#94a3b8", // Default Grey
   },
-
-  icon: { marginRight: 10, marginTop: 2 },
-  textContainer: { flex: 1 },
-
-  notifTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#111827",
+  
+  iconContainer: { 
+    marginRight: 14, 
+    justifyContent: 'flex-start',
+    marginTop: 2 
   },
-
-  notifMessage: {
-    fontSize: 13,
-    color: "#6B7280",
-    marginTop: 2,
-  },
-
-  notifTime: {
-    fontSize: 11,
-    color: "#9CA3AF",
-    marginTop: 4,
-  },
-
-  emptyText: {
-    textAlign: "center",
-    marginTop: 20,
-    color: "#6B7280",
-  },
+  
+  textContainer: { flex: 1, justifyContent: 'center' },
+  
+  notifTitle: { fontSize: 14, fontWeight: "bold", color: "#1e293b", marginBottom: 4 },
+  notifMessage: { fontSize: 13, color: "#475569", lineHeight: 18 },
+  notifTime: { fontSize: 11, color: "#94a3b8", marginTop: 8 },
+  
+  emptyContainer: { alignItems: 'center', marginTop: 100 },
+  emptyText: { marginTop: 10, color: "#94a3b8", fontSize: 14 },
 });

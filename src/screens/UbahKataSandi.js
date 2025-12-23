@@ -59,7 +59,7 @@ export default function UbahKataSandiScreen({ navigation }) {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <LinearGradient colors={["#174A6A", "#0B3B53"]} style={styles.header}>
+      <LinearGradient colors={["#174A6A", "#0F172A"]} style={styles.header}>
         <View style={styles.headerTop}>
           <TouchableOpacity onPress={() => navigation.goBack()}>
             <Ionicons name="arrow-back" size={24} color="#fff" />

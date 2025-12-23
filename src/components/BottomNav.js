@@ -54,7 +54,7 @@ export default function BottomNav({ navigation, active }) {
             active === "DataLocal" && styles.navTextActive,
           ]}
         >
-          Data Lokal
+          Data
         </Text>
       </TouchableOpacity>
 

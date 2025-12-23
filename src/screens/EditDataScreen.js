@@ -1,5 +1,5 @@
 // ===============================
-// 📱 EditDatascreen.js
+// 📱 EditDataScreen.js (FINAL: GRADIENT HEADER + NOTIF UNGU)
 // ===============================
 import React, { useState, useEffect } from "react";
 import {
@@ -15,7 +15,11 @@ import {
   Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient"; // ✅ Import Gradasi
 import { updateLocalPrice } from "../../config/database";
+
+// ✅ Import Helper Notifikasi
+import { pushNotification } from "../../src/screens/NotificationScreen";
 
 export default function EditDataScreen({ route, navigation }) {
   // ============================
@@ -65,6 +69,13 @@ export default function EditDataScreen({ route, navigation }) {
   const satuan =
     item.unit || item.satuan || item.name_unit || "kg";
 
+  // Helper untuk mendapatkan nama (dipakai di UI dan Notif)
+  const displayName = item.nama_komoditas || 
+                      item.nama || 
+                      item.local_nama || 
+                      item.commodity_name || 
+                      "Komoditas";
+
   const [saving, setSaving] = useState(false);
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
 
@@ -100,6 +111,7 @@ export default function EditDataScreen({ route, navigation }) {
 
       const idKey = item.id || item.local_id;
 
+      // 1. Update Database
       await updateLocalPrice(idKey, {
         price: Number(harga),
         unit: satuan,
@@ -107,6 +119,14 @@ export default function EditDataScreen({ route, navigation }) {
         updated_at: new Date().toISOString(),
       });
 
+      // ✅ 2. TRIGGER NOTIFIKASI EDIT (UNGU)
+      await pushNotification({
+        type: "edit",
+        title: "Data Diperbarui",
+        message: `Harga ${displayName} berhasil diubah menjadi Rp ${formatRupiah(harga)}.`,
+      });
+
+      // 3. Tampilkan Popup Sukses
       setShowSuccessPopup(true);
 
       setTimeout(() => {
@@ -127,8 +147,11 @@ export default function EditDataScreen({ route, navigation }) {
       style={{ flex: 1, backgroundColor: "#fff" }}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      {/* HEADER */}
-      <View style={styles.header}>
+      {/* ✅ HEADER GRADIENT */}
+      <LinearGradient
+        colors={["#174A6A", "#0F172A"]} // Warna Gradasi Biru Laut
+        style={styles.header}
+      >
         <TouchableOpacity
           onPress={() => navigation.goBack()}
           style={styles.backButton}
@@ -137,31 +160,23 @@ export default function EditDataScreen({ route, navigation }) {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Edit Data</Text>
         <View style={{ width: 22 }} />
-      </View>
+      </LinearGradient>
 
       {/* FORM */}
       <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.label}>Nama Komoditas</Text>
         <TextInput
           style={[styles.input, styles.disabledInput]}
-          // Menggunakan fallback yang lebih lengkap
-          value={
-            item.nama_komoditas ||
-            item.nama ||
-            item.local_nama || 
-            item.commodity_name ||
-            "-"
-          }
+          value={displayName}
           editable={false}
         />
 
         <Text style={styles.label}>Kategori</Text>
         <TextInput
           style={[styles.input, styles.disabledInput]}
-          // Menggunakan fallback yang lebih lengkap
           value={
             item.kategori || 
-            item.category || // Fallback untuk kategori umum
+            item.category || 
             "-"
           }
           editable={false}
@@ -232,12 +247,12 @@ export default function EditDataScreen({ route, navigation }) {
 }
 
 // ============================
-// STYLES (TIDAK DIUBAH)
+// STYLES
 // ============================
 const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   header: {
-    backgroundColor: "#174A6A",
+    // backgroundColor dihapus karena digantikan LinearGradient
     paddingTop: 12,
     paddingHorizontal: 16,
     paddingBottom: 16,

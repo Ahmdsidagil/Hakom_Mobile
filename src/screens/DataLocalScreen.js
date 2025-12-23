@@ -304,7 +304,7 @@ export default function DataLocalScreen({ navigation }) {
       <LinearGradient colors={["#174A6A", "#0F172A"]} style={styles.header}>
         <View style={styles.headerTop}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.headerTitle}>Harga Rata Rata Komoditas</Text>
+            <Text style={styles.headerTitle}>Harga Rata-Rata Komoditas</Text>
           </View>
           <View style={styles.headerActions}>
             {isSyncing && (
@@ -432,7 +432,7 @@ export default function DataLocalScreen({ navigation }) {
         </TouchableOpacity>
         <TouchableOpacity style={styles.navItem}>
           <Ionicons name="folder" size={24} color="#174A6A" />
-          <Text style={[styles.navText, styles.navTextActive]}>Rata-rata</Text>
+          <Text style={[styles.navText, styles.navTextActive]}>Data</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate("Profile")}>
           <Ionicons name="person-outline" size={24} color="#6B7280" />
