@@ -40,8 +40,14 @@ const resolveUnit = (item) => item.name_unit || item.unit || item.satuan || "Kg"
 const getLocalYMD = (dateInput) => {
   if (!dateInput) return null;
   const d = new Date(dateInput);
-  return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
+
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
 };
+
 
 const getLocalDateMidnight = (dateInput) => {
   const d = new Date(dateInput);
@@ -275,8 +281,8 @@ export default function DataLocalScreen({ navigation }) {
             nama: group.displayName,
             harga: `Rp ${finalPrice.toLocaleString("id-ID")}`,
             satuan: group.displayUnit,
-            tanggal: new Date(group.maxTimestamp).toISOString(),
-            displayDate: formatTanggalItem(new Date(group.maxTimestamp)),
+            tanggal: group.items[0].date,
+            displayDate: formatTanggalItem(group.items[0].date),
             kategori: finalCategory,
             image: group.displayImage,
             status: status,
