@@ -77,45 +77,43 @@ export default function DashboardScreen({ navigation }) {
   // 🔄 LOGIKA AUTO SYNC (OFFLINE -> ONLINE)
   // ===============================
   const syncOfflineData = async () => {
-    try {
-      const db = await getDatabase();
-      // Cari data yang belum tersinkron (is_synced = 0)
-      const unsyncedData = await db.getAllAsync("SELECT * FROM prices WHERE is_synced = 0");
+  try {
+    const db = await getDatabase();
 
-      if (unsyncedData && unsyncedData.length > 0) {
-        for (const item of unsyncedData) {
-          try {
-            // Upload ke Server
-            const response = await fetch("http://103.100.27.57:5000/api/prices", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                commodity_id: item.commodity_id,
-                price: item.price,
-              }),
-            });
+    const unsyncedData = await db.getAllAsync(`
+      SELECT * FROM local_prices WHERE synced = 0
+    `);
 
-            if (response.ok) {
-              // Jika sukses, update status lokal jadi 1
-              await db.runAsync("UPDATE prices SET is_synced = 1 WHERE id = ?", [item.id]);
+    if (!unsyncedData || unsyncedData.length === 0) return;
 
-              // 🔥 PUSH NOTIFIKASI "TERSINKRON" (BIRU)
-              await pushNotification({
-                type: "synced",
-                title: "Data Tersinkronisasi",
-                message: `Harga Rp ${formatHarga(item.price)} berhasil diupload ke server.`,
-              });
-            }
-          } catch (err) {
-            console.log("Gagal upload item:", item.id);
-          }
+    for (const item of unsyncedData) {
+      try {
+        const response = await fetch("http://103.100.27.57:5000/api/prices", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            commodity_id: item.commodity_id,
+            price: item.raw_price || item.price,
+            date: item.date || getLocalYMD(item.tanggal),
+          }),
+        });
+
+        if (response.ok) {
+          await db.runAsync(
+            "UPDATE local_prices SET synced = 1 WHERE id = ?",
+            [item.id]
+          );
         }
-        reloadDashboard(); 
+      } catch (err) {
+        console.log("Gagal upload item:", item.id);
       }
-    } catch (e) {
-      console.log("Sync error:", e);
     }
-  };
+
+    reloadDashboard();
+  } catch (e) {
+    console.log("Sync error:", e);
+  }
+};
 
   // ===============================
   // RELOAD DASHBOARD (LOG LOKAL)

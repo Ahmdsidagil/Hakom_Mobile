@@ -26,54 +26,97 @@ import {
 } from "../../config/database";
 
 // ========================
-// 🛠️ HELPER FUNCTIONS
+// 🛠️ HELPER FUNCTIONS (FINAL)
 // ========================
-const safeParsePrice = (value) => {
+
+// ✅ Aman parsing harga
+export const safeParsePrice = (value) => {
   if (value === null || value === undefined) return 0;
   const cleaned = value.toString().replace(/[^0-9]/g, "");
   return Number(cleaned) || 0;
 };
 
-const resolveName = (item) => item.name_commodity || item.nama || item.commodity_name || item.name || "-";
-const resolveUnit = (item) => item.name_unit || item.unit || item.satuan || "Kg";
+// ✅ Resolve nama komoditas
+export const resolveName = (item) =>
+  item.name_commodity ||
+  item.nama ||
+  item.commodity_name ||
+  item.name ||
+  "-";
 
-const getLocalYMD = (dateInput) => {
+// ✅ Resolve satuan
+export const resolveUnit = (item) =>
+  item.name_unit ||
+  item.unit ||
+  item.satuan ||
+  "Kg";
+
+// ✅ Ambil tanggal lokal (YYYY-MM-DD) TANPA UTC SHIFT
+export const getLocalYMD = (dateInput) => {
   if (!dateInput) return null;
   const d = new Date(dateInput);
 
+  if (isNaN(d.getTime())) return null;
+
   const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
 };
 
-
-const getLocalDateMidnight = (dateInput) => {
+// ✅ Pakai saat DatePicker berubah
+export const getLocalDateMidnight = (dateInput) => {
+  if (!dateInput) return null;
   const d = new Date(dateInput);
   d.setHours(0, 0, 0, 0);
   return d;
 };
 
-// 🔥 UPDATE FORMAT TANGGAL & JAM (Pakai Titik)
-const formatTanggalItem = (tgl) => {
+// 🔥 Gabungkan TANGGAL (YYYY-MM-DD) + JAM (created_at)
+export const mergeDateAndTime = (dateStr, timeSource) => {
+  if (!dateStr) return null;
+
+  // base tanggal TANPA UTC
+  const baseDate = new Date(`${dateStr}T00:00:00`);
+  if (isNaN(baseDate.getTime())) return null;
+
+  // ambil jam dari created_at
+  if (timeSource) {
+    const time = new Date(timeSource);
+    if (!isNaN(time.getTime())) {
+      baseDate.setHours(
+        time.getHours(),
+        time.getMinutes(),
+        time.getSeconds(),
+        0
+      );
+    }
+  }
+
+  return baseDate;
+};
+
+// 🔥 Format tanggal + jam (24 Ags 2024, 14.32)
+export const formatTanggalItem = (tgl) => {
   if (!tgl) return "-";
+
   const d = new Date(tgl);
   if (isNaN(d.getTime())) return "-";
-  
+
   const datePart = d.toLocaleDateString("id-ID", {
     day: "numeric",
     month: "short",
-    year: "numeric"
+    year: "numeric",
   });
 
   const timePart = d.toLocaleTimeString("id-ID", {
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false
+    hour12: false,
   });
 
-  return `${datePart}, ${timePart.replace(':', '.')}`;
+  return `${datePart}, ${timePart.replace(":", ".")}`;
 };
 
 // ========================
@@ -207,94 +250,104 @@ export default function DataLocalScreen({ navigation }) {
   // 🔒 LOGIC GROUPING & DISPLAY (TIDAK DIUBAH)
   // ========================
   const groupedCommodities = useMemo(() => {
-    const dateStr = getLocalYMD(selectedDate);
-    const groups = new Map();
+  const dateStr = getLocalYMD(selectedDate);
+  const groups = new Map();
 
-    dataKomoditas.forEach(item => {
-        if (item.date !== dateStr) return;
-        if (search && !item.nama.toLowerCase().includes(search.toLowerCase())) return;
+  dataKomoditas.forEach(item => {
+    if (item.date !== dateStr) return;
+    if (search && !item.nama.toLowerCase().includes(search.toLowerCase())) return;
 
-        const id = item.commodity_id;
-        if (!groups.has(id)) {
-            groups.set(id, {
-                commodity_id: id,
-                items: [],
-                serverData: null,
-                maxTimestamp: 0,
-                displayName: item.nama,
-                displayUnit: item.satuan,
-                displayCategory: item.kategori, 
-                displayImage: item.image || item.local_image,
-            });
-        }
+    const id = item.commodity_id;
+    if (!groups.has(id)) {
+      groups.set(id, {
+        commodity_id: id,
+        items: [],
+        serverData: null,
+        maxTimestamp: 0,
+        latestItem: null, // 🔥 TAMBAHAN
+        displayName: item.nama,
+        displayUnit: item.satuan,
+        displayCategory: item.kategori,
+        displayImage: item.image || item.local_image,
+      });
+    }
 
-        const group = groups.get(id);
-        group.items.push(item);
+    const group = groups.get(id);
+    group.items.push(item);
 
-        const itemTime = new Date(item.tanggal).getTime();
-        if (itemTime > group.maxTimestamp) {
-            group.maxTimestamp = itemTime;
-            if (!item.is_daily_average && item.local_image) {
-                group.displayImage = item.local_image;
-            }
-        }
+    const itemTime = new Date(item.tanggal).getTime();
+    if (!isNaN(itemTime) && itemTime > group.maxTimestamp) {
+      group.maxTimestamp = itemTime;
+      group.latestItem = item; // 🔥 SIMPAN ITEM TERBARU
 
-        if (item.is_daily_average) {
-            group.serverData = item;
-            group.displayName = item.nama; 
-            group.displayCategory = item.kategori;
-            if (item.image) group.displayImage = item.image;
-        } else {
-            if (item.kategori && !group.displayCategory) {
-                group.displayCategory = item.kategori;
-            }
-        }
+      if (!item.is_daily_average && item.local_image) {
+        group.displayImage = item.local_image;
+      }
+    }
+
+    if (item.is_daily_average) {
+      group.serverData = item;
+      group.displayName = item.nama;
+      group.displayCategory = item.kategori;
+      if (item.image) group.displayImage = item.image;
+    } else {
+      if (item.kategori && !group.displayCategory) {
+        group.displayCategory = item.kategori;
+      }
+    }
+  });
+
+  const results = Array.from(groups.values()).map(group => {
+    const finalCategory = group.displayCategory || "Lainnya";
+    if (selectedTab !== "Semua" && finalCategory !== selectedTab) return null;
+
+    let localTotal = 0;
+    let localCount = 0;
+
+    group.items.forEach(i => {
+      if (!i.is_daily_average) {
+        localTotal += i.raw_price;
+        localCount += 1;
+      }
     });
 
-    const results = Array.from(groups.values()).map(group => {
-        const finalCategory = group.displayCategory || "Lainnya";
-        if (selectedTab !== "Semua" && finalCategory !== selectedTab) return null;
+    let finalPrice = 0;
+    let status = "Tersinkron";
 
-        let localTotal = 0;
-        let localCount = 0;
+    if (group.serverData) {
+      finalPrice = group.serverData.raw_price;
+    } else {
+      finalPrice = localCount > 0 ? Math.round(localTotal / localCount) : 0;
+      status = "Belum Tersinkron";
+    }
 
-        group.items.forEach(i => {
-            if (!i.is_daily_average) {
-                localTotal += i.raw_price;
-                localCount += 1;
-            }
-        });
+    // 🔥 INI KUNCI PERBAIKAN JAM
+    const mergedDate = mergeDateAndTime(
+      dateStr,                 // YYYY-MM-DD (filter)
+      group.latestItem?.tanggal // JAM TERBARU DARI DETAIL
+    );
 
-        let finalPrice = 0;
-        let status = "Tersinkron";
+    return {
+      id: group.commodity_id,
+      commodity_id: group.commodity_id,
+      nama: group.displayName,
+      harga: `Rp ${finalPrice.toLocaleString("id-ID")}`,
+      satuan: group.displayUnit,
+      tanggal: mergedDate?.toISOString(),
+      displayDate: formatTanggalItem(mergedDate),
+      kategori: finalCategory,
+      image: group.displayImage,
+      status: status,
+      localCount: localCount
+    };
+  }).filter(Boolean);
 
-        if (group.serverData) {
-            finalPrice = group.serverData.raw_price;
-        } else {
-            finalPrice = localCount > 0 ? Math.round(localTotal / localCount) : 0;
-            status = "Belum Tersinkron";
-        }
+  return results.sort((a, b) => {
+    return new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime();
+  });
 
-        return {
-            id: group.commodity_id,
-            commodity_id: group.commodity_id,
-            nama: group.displayName,
-            harga: `Rp ${finalPrice.toLocaleString("id-ID")}`,
-            satuan: group.displayUnit,
-            tanggal: group.items[0].date,
-            displayDate: formatTanggalItem(group.items[0].date),
-            kategori: finalCategory,
-            image: group.displayImage,
-            status: status,
-            localCount: localCount
-        };
-    }).filter(Boolean);
+}, [dataKomoditas, search, selectedTab, selectedDate]);
 
-    return results.sort((a, b) => {
-        return new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime();
-    });
-
-  }, [dataKomoditas, search, selectedTab, selectedDate]);
 
   const handleDateChange = (event, date) => {
     setShowDatePicker(false);

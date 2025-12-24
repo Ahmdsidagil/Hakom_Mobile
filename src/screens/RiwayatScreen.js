@@ -27,36 +27,28 @@ import {
 // ================= GLOBAL CONST =================
 const STATUS_OPTIONS = ["Semua", "Tersinkron", "Hapus"];
 
-// ================= HELPER TANGGAL (UPDATE) =================
-// Helper sederhana untuk mengubah objek Date ke string YYYY-MM-DD Lokal
+// ================= HELPER TANGGAL =================
 const toLocalYMD = (dateObj) => {
   if (!dateObj) return "";
-  const year = dateObj.getFullYear();
-  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-  const day = String(dateObj.getDate()).padStart(2, '0');
+  const d = new Date(dateObj);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
 
-// Helper banding tanggal yang lebih "Pemaaf"
+
 const isSameDay = (dateInput, selectedDateObj) => {
   if (!dateInput || !selectedDateObj) return false;
-  
-  // Target yang dicari (Hari Ini di HP)
-  const targetStr = toLocalYMD(selectedDateObj);
 
-  // Cek Input Data (Bisa string YYYY-MM-DD atau ISO Time)
   let inputStr = "";
-  
-  // Jika format database sudah "2023-12-23" (pendek)
+
   if (typeof dateInput === 'string' && dateInput.length === 10) {
     inputStr = dateInput;
   } else {
-    // Jika format panjang (ISO), ubah ke Date object lalu ke lokal string
-    const d = new Date(dateInput);
-    inputStr = toLocalYMD(d);
+    inputStr = toLocalYMD(new Date(dateInput));
   }
-
-  return inputStr === targetStr;
+  return inputStr === toLocalYMD(selectedDateObj);
 };
 
 export default function RiwayatScreen({ navigation }) {
@@ -82,67 +74,78 @@ export default function RiwayatScreen({ navigation }) {
     });
   };
 
-  // =============================== FETCH DATA (LOGIC FIX) ===============================
+  // =============================== FETCH DATA (FIXED CATEGORY) ===============================
   const fetchData = async () => {
     setLoading(true);
     try {
       const db = await getDatabase();
 
-      // 1️⃣ KATEGORI
+      // 1. Ambil Master Data untuk Sinkronisasi Kategori
+      const masterCom = await db.getAllAsync(
+        `SELECT id_commodity, name_commodity, category_name FROM commodities`
+      );
+      
+      const categoryLookupById = {};
+      const categoryLookupByName = {};
+
+      masterCom.forEach(item => {
+        if (item.id_commodity) categoryLookupById[item.id_commodity] = item.category_name;
+        if (item.name_commodity) categoryLookupByName[item.name_commodity] = item.category_name;
+      });
+
+      // 2. Kategori Tabs
       const cats = await db.getAllAsync(`SELECT name_category FROM categories`);
       setKategoriList(["Semua", ...cats.map(c => c.name_category)]);
 
-      // 2️⃣ RIWAYAT HAPUS
+      // 3. Riwayat Hapus
       const hapusRaw = await getAllRiwayatHapus();
       
       const listHapus = await Promise.all(
         hapusRaw.map(async (h) => {
-          let finalImage = h.local_image || h.image;
-          if (!finalImage || finalImage === "null") {
-            finalImage = await getImageForCommodityByName(h.name_commodity);
-          }
+          let img = h.local_image || h.image;
+          if (!img || img === "null") img = await getImageForCommodityByName(h.name_commodity);
           
           return {
             ...h,
-            unique_key: `hapus_${h.id}_${Math.random()}`, // Pastikan ID unik
+            unique_key: `hapus_${h.id}_${Math.random()}`,
             type: "deleted",
             status_label: "Hapus",
-            image: finalImage,
-            local_image: finalImage,
-            name_category: h.name_category || "Tidak diketahui",
-            // Prioritas tanggal: Tanggal asli -> Kapan dibuat -> Kapan dihapus
+            image: img,
+            // SINKRONISASI KATEGORI
+            name_category: h.name_category || categoryLookupById[h.commodity_id] || categoryLookupByName[h.name_commodity] || "Bumbu",
             tanggal_fix: h.tanggal || h.created_at || new Date().toISOString()
           };
         })
       );
 
-      // 3️⃣ RIWAYAT TERSINKRON
+      // 4. Riwayat Tersinkron
       const pendataanRaw = await getAllRiwayatPendataan();
       
       const listTersinkron = await Promise.all(
         pendataanRaw.map(async (p) => {
           if (!p.name_commodity) return null;
-          const image = await getImageForCommodityByName(p.name_commodity);
+          const img = await getImageForCommodityByName(p.name_commodity);
+          
           return {
             ...p,
             unique_key: `sync_${p.id}`,
             type: "active",
             status_label: "Tersinkron",
-            image,
-            local_image: image,
-            tanggal_fix: p.tanggal || p.created_at
+            image: img,
+            // SINKRONISASI KATEGORI
+            name_category: p.name_category || categoryLookupById[p.commodity_id] || categoryLookupByName[p.name_commodity] || "Bumbu",
+            tanggal_fix: p.tanggal || p.created_at || new Date().toISOString()
           };
         })
       );
 
-      // 4️⃣ GABUNG LANGSUNG (TANPA FILTER SEMBUNYI)
-      // Kita biarkan semua muncul dulu untuk memastikan data ada
+
       const merged = [...listTersinkron, ...listHapus]
         .filter(Boolean)
         .sort((a, b) => new Date(b.tanggal_fix) - new Date(a.tanggal_fix));
 
       setDataRiwayat(merged);
-      
+    
     } catch (e) {
       console.error("❌ Riwayat error:", e);
     } finally {
@@ -151,9 +154,7 @@ export default function RiwayatScreen({ navigation }) {
     }
   };
 
-  useFocusEffect(
-    useCallback(() => { fetchData(); }, [])
-  );
+  useFocusEffect(useCallback(() => { fetchData(); }, []));
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -162,26 +163,11 @@ export default function RiwayatScreen({ navigation }) {
 
   // =============================== FILTER ===============================
   const filteredData = dataRiwayat.filter(item => {
-    // 1. Filter Search
+  
     const matchSearch = item.name_commodity?.toLowerCase().includes(search.toLowerCase());
-    
-    // 2. Filter Kategori
-    const matchCategory = selectedTab === "Semua" || !item.name_category || item.name_category === selectedTab;
-    
-    // 3. Filter Status
+    const matchCategory = selectedTab === "Semua" || item.name_category === selectedTab;
     const matchStatus = filterStatus === "Semua" || item.status_label === filterStatus;
-    
-    // 4. Filter Tanggal (YANG LEBIH KUAT)
-    let matchDate = true;
-    if (isDateFiltered || true) { // Default selalu filter tanggal yang dipilih
-       // Cek Tanggal Utama
-       const dateMatch1 = isSameDay(item.tanggal_fix, selectedDate);
-       
-       // Cek juga Created_At (Jaga-jaga kalau tanggal hapusnya pakai created_at)
-       const dateMatch2 = isSameDay(item.created_at, selectedDate);
-       
-       matchDate = dateMatch1 || dateMatch2;
-    }
+    const matchDate = isSameDay(item.tanggal_fix, selectedDate) || isSameDay(item.created_at, selectedDate);
 
     return matchSearch && matchCategory && matchStatus && matchDate;
   });
@@ -200,21 +186,17 @@ export default function RiwayatScreen({ navigation }) {
       {/* HEADER */}
       <LinearGradient colors={["#174A6A", "#0F172A"]} style={styles.header}>
         <View style={styles.headerTop}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 5, marginRight:10 }}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 5, marginRight: 10 }}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Riwayat Pendataan</Text>
-          <View style={{flex:1}}/>
+          <View style={{ flex: 1 }} />
           <TouchableOpacity onPress={() => setFilterVisible(true)} style={{ padding: 5 }}>
             <Ionicons name="filter" size={24} color="#fff" />
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity
-          style={styles.dateSelector}
-          onPress={() => setDatePickerVisible(true)}
-          activeOpacity={0.8}
-        >
+        <TouchableOpacity style={styles.dateSelector} onPress={() => setDatePickerVisible(true)}>
           <Ionicons name="calendar" size={18} color="#174A6A" />
           <Text style={styles.dateSelectorText}>{formatIndoDate(selectedDate)}</Text>
           <Ionicons name="chevron-down" size={16} color="#94A3B8" />
@@ -239,15 +221,13 @@ export default function RiwayatScreen({ navigation }) {
                 style={[styles.tabItem, selectedTab === cat && styles.tabItemActive]}
                 onPress={() => setSelectedTab(cat)}
               >
-                <Text style={[styles.tabText, selectedTab === cat && styles.tabTextActive]}>
-                  {cat}
-                </Text>
+                <Text style={[styles.tabText, selectedTab === cat && styles.tabTextActive]}>{cat}</Text>
               </TouchableOpacity>
             ))}
-            <View style={{width:20}}/>
           </ScrollView>
         </View>
 
+        {/* TOTAL DATA BADGE (DIKEMBALIKAN) */}
         <View style={styles.totalBadgeContainer}>
           <View style={styles.totalBadge}>
             <Ionicons name="cube-outline" size={14} color="#E2E8F0" />
@@ -294,9 +274,9 @@ export default function RiwayatScreen({ navigation }) {
                     </View>
 
                     <View style={styles.rowMiddle}>
-                      <Text style={styles.cardPrice}>
-                        Rp {Number(item.price).toLocaleString("id-ID")} / {item.unit}
-                      </Text>
+                        <Text style={styles.cardPrice}>
+                            Rp {Number(item.price).toLocaleString("id-ID")} / {item.unit}
+                        </Text>
                     </View>
 
                     <View style={styles.cardFooter}>
@@ -359,7 +339,7 @@ export default function RiwayatScreen({ navigation }) {
   );
 }
 
-// ================= STYLES (TETAP SAMA) =================
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8FAFC" },
   header: { paddingTop: 45, paddingHorizontal: 20, paddingBottom: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
