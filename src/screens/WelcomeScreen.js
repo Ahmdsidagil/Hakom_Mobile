@@ -29,7 +29,7 @@ const sampleImages = [
   require("../assets/beras.jpg"),
   require("../assets/ikan_tongkol.jpg"),
   require("../assets/telur.jpeg"),
-  require("../assets/buah.png"),
+  require("../assets/buah.jpg"),
   require("../assets/gula.jpeg"),
   require("../assets/tahutempe.jpg"),
 ];

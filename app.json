@@ -14,11 +14,18 @@
     "ios": {
       "supportsTablet": true
     },
-    "android": {},
+    "android": {
+      "package": "com.ahmad_said.frontend"
+    },
     "web": {},
     "sdkVersion": "54.0.0",
     "plugins": [
       "expo-sqlite"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "d3036c22-6759-4471-8f8a-2c36486ec0fa"
+      }
+    }
   }
 }
