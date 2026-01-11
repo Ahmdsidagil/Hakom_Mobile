@@ -242,6 +242,26 @@ export const getDetailHargaForScreen = async (commodityId, dateStr) => {
   );
 };
 
+export const getDashboardHistoryLocal = async (limit = 10) => {
+  const dbInst = await getDatabase();
+
+  // Ambil langsung dari kolom yang ada di local_prices
+  return await dbInst.getAllAsync(`
+    SELECT 
+      id_price,
+      commodity_name,
+      category_name,
+      unit_name,
+      price,
+      created_at,
+      image,
+      synced
+    FROM local_prices
+    ORDER BY created_at DESC
+    LIMIT ?
+  `, [limit]);
+};
+
 export const syncPriceHistoryFromServer = async (commodityId, dateStr) => {
   const cacheKey = `${commodityId}_${dateStr}`;
 
@@ -276,36 +296,30 @@ export const syncPriceHistoryFromServer = async (commodityId, dateStr) => {
     const dbInst = await getDatabase();
 
     await dbInst.withTransactionAsync(async () => {
-      // 🧹 Bersihkan data server lama SEBELUM insert
-      await dbInst.runAsync(
-        `DELETE FROM local_prices 
-          WHERE commodity_id = ? AND date = ? AND synced = 1`,
-        [commodityId, dateStr]
-      );
+  // 1. Hapus data lama yang sudah tersinkron agar tidak double
+  await dbInst.runAsync(
+    `DELETE FROM local_prices 
+      WHERE commodity_id = ? AND date = ? AND synced = 1`,
+    [commodityId, dateStr]
+  );
 
-      // Gunakan Set untuk mencegah duplikat dari API itu sendiri (jika API error kasih double data)
-      const processedPrices = new Set();
-
-      for (const it of items) {
-        // Cek unik sederhana biar tidak insert data sama persis dari array API
-        const uniqueKey = `${it.price}-${it.unit}`;
-        if(processedPrices.has(uniqueKey)) continue; 
-        processedPrices.add(uniqueKey);
-
-        await dbInst.runAsync(
-          `INSERT INTO local_prices 
-            (commodity_id, price, unit, date, created_at, synced)
-            VALUES (?, ?, ?, ?, ?, 1)`,
-          [
-            commodityId,
-            it.price,
-            it.unit_name || it.unit,
-            dateStr,
-            it.created_at || new Date().toISOString(),
-          ]
-        );
-      }
-    });
+  // 2. JANGAN pakai Set/uniqueKey yang isinya harga.
+  // Langsung masukkan semua data yang datang dari server.
+  for (const it of items) {
+    await dbInst.runAsync(
+      `INSERT INTO local_prices 
+        (commodity_id, price, unit, date, created_at, synced)
+        VALUES (?, ?, ?, ?, ?, 1)`,
+      [
+        commodityId,
+        it.price,
+        it.unit_name || it.unit,
+        dateStr,
+        it.created_at || new Date().toISOString(),
+      ]
+    );
+  }
+});
 
     console.log(`✅ Sync detail OK: ${cacheKey} (Items: ${items.length})`);
   } catch (e) {
@@ -683,6 +697,7 @@ export default {
   getCommoditiesByCategory,
   getDashboardStats,
   getLatestPrices,
+  getDashboardHistoryLocal,
   countUniqueCommodities,
   restoreAllPricesFromServer,
   getImageForCommodityByName,

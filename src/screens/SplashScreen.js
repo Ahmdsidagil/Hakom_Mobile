@@ -29,7 +29,7 @@ export default function SplashScreen() {
       />
 
       {/* Teks */}
-      <Text style={styles.title}>HaKom</Text>
+      <Text style={styles.title}>Moniteras</Text>
     </LinearGradient>
   );
 }

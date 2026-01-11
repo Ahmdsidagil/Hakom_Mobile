@@ -79,61 +79,50 @@ export default function DetailHargaScreen() {
   // 🔥 FETCH DATA LOGIC
   // ========================
   const fetchData = useCallback(async (isRefresh = false) => {
-    if (!isRefresh) setLoading(true);
+  if (!isRefresh) setLoading(true);
+  
+  try {
+    const rows = await getDetailHargaForScreen(commodity_id, targetDateStr);
     
-    try {
-      const rows = await getDetailHargaForScreen(commodity_id, targetDateStr);
-      
-      if (!rows || rows.length === 0) {
-        setDisplayItems([]);
-        setLoading(false);
-        setRefreshing(false);
-        return;
-      }
-
-      const parsedData = rows.map(r => {
-          const isSynced = (r.synced == 1); 
-          const dateObj = safeDate(r.created_at);
-
-          const unitCandidates = [r.unit_input, r.unit_name, r.price_unit, r.unit, r.master_unit, satuan];
-          const validUnit = unitCandidates.find(u => u && u !== "null" && u !== "" && u !== "undefined");
-
-          return {
-              ...r,
-              uiId: r.id, 
-              isSynced: isSynced,
-              priceNum: Number(r.price || 0),
-              dateObj: dateObj,
-              timeMs: dateObj.getTime(),
-              imageSource: resolveImageSource(r.local_image, r.image || r.server_image),
-              finalUnit: validUnit || "Kg",
-              finalCategory: r.kategori_nama || r.name_category || "-"
-          };
-      });
-
-      const syncedItems = parsedData.filter(d => d.isSynced);
-      const localItems = parsedData.filter(d => !d.isSynced);
-      let finalData = [...syncedItems];
-
-      localItems.forEach(localItem => {
-          const isDuplicate = syncedItems.some(serverItem => {
-              const samePrice = serverItem.priceNum === localItem.priceNum;
-              const timeDiff = Math.abs(serverItem.timeMs - localItem.timeMs);
-              return samePrice && timeDiff < 300000;
-          });
-          if (!isDuplicate) finalData.push(localItem);
-      });
-
-      finalData.sort((a, b) => b.timeMs - a.timeMs);
-      setDisplayItems(finalData);
-
-    } catch (e) {
-      console.error("❌ Error Fetch:", e);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+    if (!rows || rows.length === 0) {
+      setDisplayItems([]);
+      return;
     }
-  }, [commodity_id, targetDateStr, satuan]);
+
+    const parsedData = rows.map(r => {
+        const isSynced = (r.synced == 1); 
+        const dateObj = safeDate(r.created_at);
+
+        // Mencari unit yang tersedia
+        const unitCandidates = [r.unit_input, r.unit_name, r.price_unit, r.unit, r.master_unit, satuan];
+        const validUnit = unitCandidates.find(u => u && u !== "null" && u !== "" && u !== "undefined");
+
+        return {
+            ...r,
+            uiId: r.id, 
+            isSynced: isSynced,
+            priceNum: Number(r.price || 0),
+            dateObj: dateObj,
+            timeMs: dateObj.getTime(),
+            imageSource: resolveImageSource(r.local_image, r.image || r.server_image),
+            finalUnit: validUnit || "Kg",
+            finalCategory: r.kategori_nama || r.name_category || "-"
+        };
+    });
+
+    // ✅ PERBAIKAN: Langsung tampilkan semua data (3 item dari log akan muncul semua)
+    // Tidak perlu lagi memisahkan syncedItems dan localItems lalu memfilternya
+    const finalData = [...parsedData].sort((a, b) => b.timeMs - a.timeMs);
+    
+    setDisplayItems(finalData);
+
+  } catch (e) {
+    console.error("❌ Error Fetch:", e);
+  } finally {
+    setLoading(false);
+    setRefreshing(false);
+  }
+}, [commodity_id, targetDateStr, satuan]);
 
   // ========================
   // 🔄 SYNC & REFRESH

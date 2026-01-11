@@ -87,9 +87,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.ahmad_said.frontend'
+    namespace 'com.ahmad_said.moniteras'
     defaultConfig {
-        applicationId 'com.ahmad_said.frontend'
+        applicationId 'com.ahmad_said.moniteras'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

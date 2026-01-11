@@ -22,12 +22,15 @@ export default {
   ADD_PRICE: `${BASE_URL}/sync/price`,     // Input single
   SYNC_PRICES: `${BASE_URL}/sync`,         // Batch sync
   
-  // ⬇️ Restore & History (Sering menyebabkan error jika tidak ada)
-  PRICE_ALL: `${BASE_URL}/price/all`,      // Digunakan di restoreAllPrices
-  PRICE_DETAIL: `${BASE_URL}/prices/detail`, // <--- WAJIB ADA untuk syncPriceHistoryFromServer
-  
+  // ⬇️ Restore & History
+  PRICE_ALL: `${BASE_URL}/price/all`,
+  PRICE_DETAIL: `${BASE_URL}/prices/detail`,
+
   // 📡 Endpoint Lainnya
   PRICE: `${BASE_URL}/prices`,
+
+  // ✅ TAMBAHAN SAJA (TIDAK MENGUBAH YANG LAIN)
+  HISTORY_BY_USER: `${BASE_URL}/price/history`,
 };
 
 // ==============================
@@ -66,7 +69,6 @@ export const updatePassword = async (token, oldPassword, newPassword) => {
       body: JSON.stringify({ oldPassword, newPassword }),
     });
 
-    // sebelum parse, cek raw text
     const text = await response.text();
     console.log("Response raw dari server:", text);
 

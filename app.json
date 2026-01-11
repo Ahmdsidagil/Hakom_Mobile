@@ -1,7 +1,8 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
+    "name": "Moniteras",
+    "slug": "moniteras",
+    "icon": "./assets/moniteras_logo.png",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -15,16 +16,21 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "com.ahmad_said.frontend"
+      "package": "com.ahmad_said.moniteras",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/moniteras_logo.png",
+        "backgroundColor": "#FFFFFF"
+      }
     },
     "web": {},
     "sdkVersion": "54.0.0",
     "plugins": [
       "expo-sqlite"
     ],
+    "owner": "ahmad_said",
     "extra": {
       "eas": {
-        "projectId": "d3036c22-6759-4471-8f8a-2c36486ec0fa"
+        "projectId": "09b3b33d-e37a-4679-99ae-11e8ef38c1e3"
       }
     }
   }
