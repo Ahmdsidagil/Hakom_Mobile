@@ -1,6 +1,7 @@
 // ===============================
-// 📱 EditDataScreen.js (FINAL: GRADIENT HEADER + NOTIF UNGU)
+// 📱 EditDataScreen.js (FINAL FULL ONLINE + OFFLINE)
 // ===============================
+
 import React, { useState, useEffect } from "react";
 import {
   View,
@@ -15,23 +16,16 @@ import {
   Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient"; // ✅ Import Gradasi
-import { updateLocalPrice } from "../../config/database";
+import { LinearGradient } from "expo-linear-gradient";
 
-// ✅ Import Helper Notifikasi
+import { updateLocalPrice, updatePriceOnline } from "../../config/database";
 import { pushNotification } from "../../src/screens/NotificationScreen";
 
 export default function EditDataScreen({ route, navigation }) {
-  // ============================
-  // AMAN AMBIL PARAM
-  // ============================
   const params = route?.params || {};
   const item = params.data || params.item || null;
   const onGoBack = params.onGoBack;
 
-  // ============================
-  // VALIDASI DATA
-  // ============================
   if (!item) {
     return (
       <View style={styles.center}>
@@ -40,27 +34,13 @@ export default function EditDataScreen({ route, navigation }) {
     );
   }
 
-  // ============================
-  // BLOK EDIT DATA ONLINE (AMAN)
-  // ============================
-  useEffect(() => {
-    if (item.synced === 1) {
-      Alert.alert(
-        "Tidak Diizinkan",
-        "Data yang sudah tersinkron tidak bisa diedit.",
-        [{ text: "OK", onPress: () => navigation.goBack() }]
-      );
-    }
-  }, []);
+useEffect(() => {
+  if (item.synced === 1) {
+    console.log("ℹ️ Editing server data mode (online update enabled)");
+  }
+}, []);
 
-  // ============================
-  // STATE
-  // ============================
-  const rawHarga =
-    item.price ??
-    item.harga ??
-    item.raw_price ??
-    "";
+  const rawHarga = item.price ?? item.harga ?? item.raw_price ?? "";
 
   const [harga, setHarga] = useState(
     String(rawHarga).replace(/[^0-9]/g, "")
@@ -69,12 +49,12 @@ export default function EditDataScreen({ route, navigation }) {
   const satuan =
     item.unit || item.satuan || item.name_unit || "kg";
 
-  // Helper untuk mendapatkan nama (dipakai di UI dan Notif)
-  const displayName = item.nama_komoditas || 
-                      item.nama || 
-                      item.local_nama || 
-                      item.commodity_name || 
-                      "Komoditas";
+  const displayName =
+    item.nama_komoditas ||
+    item.nama ||
+    item.local_nama ||
+    item.commodity_name ||
+    "Komoditas";
 
   const [saving, setSaving] = useState(false);
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
@@ -98,7 +78,7 @@ export default function EditDataScreen({ route, navigation }) {
   };
 
   // ============================
-  // SIMPAN KE SQLITE
+  // HANDLE SAVE (ONLINE + OFFLINE)
   // ============================
   const handleSave = async () => {
     if (!harga) {
@@ -109,56 +89,77 @@ export default function EditDataScreen({ route, navigation }) {
     try {
       setSaving(true);
 
-      const idKey = item.id || item.local_id;
+      const localId = item.id; // ✅ ID SQLite
+      const serverId = item.server_id;
 
-      // 1. Update Database
-      await updateLocalPrice(idKey, {
-        price: Number(harga),
-        unit: satuan,
-        synced: 0, // 🔥 wajib → agar avg & list update
-        updated_at: new Date().toISOString(),
-      });
+      console.log("SERVER ID FINAL:", serverId);
 
-      // ✅ 2. TRIGGER NOTIFIKASI EDIT (UNGU)
-      await pushNotification({
-        type: "edit",
-        title: "Data Diperbarui",
-        message: `Harga ${displayName} berhasil diubah menjadi Rp ${formatRupiah(harga)}.`,
-      });
+      let isOnlineSuccess = false;
 
-      // 3. Tampilkan Popup Sukses
-      setShowSuccessPopup(true);
-
-      setTimeout(() => {
-        setShowSuccessPopup(false);
-        onGoBack?.(); // 🔥 trigger refresh Detail & DataLocal
-        navigation.goBack();
-      }, 900);
-    } catch (err) {
-      console.warn("❌ Gagal update local:", err);
-      Alert.alert("Error", "Gagal menyimpan perubahan");
-    } finally {
-      setSaving(false);
+    // ============================
+    // 1. ONLINE (kalau ada server_id)
+    // ============================
+    if (serverId) {
+      try {
+        await updatePriceOnline(serverId, Number(harga));
+        isOnlineSuccess = true;
+      } catch (err) {
+        console.log("⚠️ Online gagal, fallback ke local:", err.message);
+      }
     }
-  };
+
+    // ============================
+    // 2. UPDATE LOCAL
+    // ============================
+    await updateLocalPrice(localId, {
+      price: Number(harga),
+      unit: satuan,
+      synced: isOnlineSuccess ? 1 : 0,
+      server_id: serverId,
+      updated_at: new Date().toISOString(),
+    });
+
+    // ============================
+    // 3. NOTIF
+    // ============================
+    await pushNotification({
+      type: "edit",
+      title: "Data Diperbarui",
+      message: `Harga ${displayName} berhasil diubah menjadi Rp ${formatRupiah(harga)}.`,
+    });
+
+    setShowSuccessPopup(true);
+
+    setTimeout(() => {
+      setShowSuccessPopup(false);
+      onGoBack?.();
+      navigation.goBack();
+    }, 900);
+
+  } catch (err) {
+    console.warn("❌ Gagal update:", err);
+    Alert.alert("Error", "Gagal menyimpan perubahan");
+  } finally {
+    setSaving(false);
+  }
+};
 
   return (
     <KeyboardAvoidingView
       style={{ flex: 1, backgroundColor: "#fff" }}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      {/* ✅ HEADER GRADIENT */}
+      {/* HEADER */}
       <LinearGradient
-        colors={["#174A6A", "#0F172A"]} // Warna Gradasi Biru Laut
+        colors={["#174A6A", "#0F172A"]}
         style={styles.header}
       >
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-        >
+        <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
+
         <Text style={styles.headerTitle}>Edit Data</Text>
+
         <View style={{ width: 22 }} />
       </LinearGradient>
 
@@ -174,11 +175,13 @@ export default function EditDataScreen({ route, navigation }) {
         <Text style={styles.label}>Kategori</Text>
         <TextInput
           style={[styles.input, styles.disabledInput]}
-          value={
-            item.kategori || 
-            item.category || 
-            "-"
-          }
+         value={
+          item.kategori ||
+          item.finalCategory ||
+          item.name_category ||
+          item.category ||
+          "-"
+        }
           editable={false}
         />
 
@@ -214,30 +217,16 @@ export default function EditDataScreen({ route, navigation }) {
             {saving ? "Menyimpan..." : "Simpan Perubahan"}
           </Text>
         </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.cancelButton]}
-          onPress={() => navigation.goBack()}
-        >
-          <Text style={[styles.buttonText, { color: "#174A6A" }]}>
-            Batal
-          </Text>
-        </TouchableOpacity>
       </ScrollView>
 
-      {/* POPUP SUKSES */}
-      <Modal transparent visible={showSuccessPopup} animationType="fade">
+      {/* POPUP SUCCESS */}
+      <Modal transparent visible={showSuccessPopup}>
         <View style={styles.popupOverlay}>
           <View style={styles.popupBox}>
-            <Ionicons
-              name="checkmark-circle"
-              size={64}
-              color="#16A34A"
-              style={{ marginBottom: 10 }}
-            />
-            <Text style={styles.popupTitle}>Berhasil Diperbarui!</Text>
+            <Ionicons name="checkmark-circle" size={60} color="#16A34A" />
+            <Text style={styles.popupTitle}>Berhasil!</Text>
             <Text style={styles.popupText}>
-              Data diperbarui secara lokal.
+              Data berhasil diperbarui
             </Text>
           </View>
         </View>
@@ -247,22 +236,24 @@ export default function EditDataScreen({ route, navigation }) {
 }
 
 // ============================
-// STYLES
+// STYLE (TETAP PUNYAMU)
 // ============================
 const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  header: {
-    // backgroundColor dihapus karena digantikan LinearGradient
-    paddingTop: 12,
-    paddingHorizontal: 16,
+   header: {
+    // backgroundColor dihapus agar gradasi terlihat
+    paddingTop: 40,
     paddingBottom: 16,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
+    paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
   },
-  backButton: { padding: 8, marginTop: 24, marginRight: 12 },
-  headerTitle: { color: "#fff", fontSize: 18, fontWeight: "700", marginTop: 24 },
+  headerTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+    marginLeft: 10,
+  },
   container: { padding: 22, paddingBottom: 40 },
   label: { fontSize: 14, fontWeight: "600", marginTop: 10, marginBottom: 5 },
   input: {
@@ -271,21 +262,17 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 10,
   },
-  disabledInput: { backgroundColor: "#F3F4F6", color: "#6B7280" },
+  disabledInput: { backgroundColor: "#F3F4F6" },
   row: { flexDirection: "row" },
   button: {
     backgroundColor: "#174A6A",
     padding: 14,
     borderRadius: 10,
-    alignItems: "center",
     marginTop: 20,
+    alignItems: "center",
   },
   buttonText: { color: "#fff", fontWeight: "bold" },
-  cancelButton: {
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "#174A6A",
-  },
+
   popupOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.25)",
@@ -294,11 +281,10 @@ const styles = StyleSheet.create({
   },
   popupBox: {
     backgroundColor: "#fff",
+    padding: 25,
     borderRadius: 16,
-    padding: 26,
-    width: "80%",
     alignItems: "center",
   },
-  popupTitle: { fontSize: 20, fontWeight: "700" },
-  popupText: { textAlign: "center", marginTop: 6 },
+  popupTitle: { fontSize: 18, fontWeight: "700" },
+  popupText: { marginTop: 5 },
 });

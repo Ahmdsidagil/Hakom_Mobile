@@ -33,7 +33,7 @@ export const initDatabase = async () => {
     CREATE TABLE IF NOT EXISTS commodities (id_commodity INTEGER PRIMARY KEY, name_commodity TEXT, category_id INTEGER, category_name TEXT, unit_id INTEGER, image TEXT, local_image TEXT);
     CREATE TABLE IF NOT EXISTS markets (id_market INTEGER PRIMARY KEY, name_market TEXT, address TEXT, status TEXT, description TEXT, opening_hours TEXT, maps_link TEXT, image TEXT, created_at TEXT, updated_at TEXT);
     CREATE TABLE IF NOT EXISTS units (id INTEGER PRIMARY KEY, name_unit TEXT);
-    CREATE TABLE IF NOT EXISTS local_prices (id INTEGER PRIMARY KEY AUTOINCREMENT, commodity_id INTEGER, category_id INTEGER, user_id INTEGER, market_id INTEGER, price REAL, unit TEXT, date TEXT, synced INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT);
+    CREATE TABLE IF NOT EXISTS local_prices (id INTEGER PRIMARY KEY AUTOINCREMENT, server_id INTEGER, commodity_id INTEGER, category_id INTEGER, user_id INTEGER, market_id INTEGER, price REAL, unit TEXT, date TEXT, synced INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT);
     CREATE TABLE IF NOT EXISTS riwayat_hapus (id INTEGER PRIMARY KEY AUTOINCREMENT, name_commodity TEXT, price REAL, unit TEXT, name_category TEXT, tanggal TEXT);
     CREATE TABLE IF NOT EXISTS riwayat_pendataan (id INTEGER PRIMARY KEY AUTOINCREMENT, name_commodity TEXT, price REAL, unit TEXT, name_category TEXT, tanggal TEXT, image TEXT);
   `);
@@ -57,7 +57,7 @@ export const getDatabase = async () => {
 // ====================================
 
 const safeParseJson = async (res) => {
-  try { const text = await res.text(); return text ? JSON.parse(text.trim()) : null; } 
+  try { const text = await res.text(); return text ? JSON.parse(text.trim()) : null; }
   catch (e) { throw e; }
 };
 
@@ -93,7 +93,7 @@ export const getImageForCommodityByName = async (commodityName) => {
 
 export const syncFromServer = async () => {
   if (isSyncing) return;
-    isSyncing = true;
+  isSyncing = true;
   try {
     const token = await AsyncStorage.getItem("token");
     if (!token) return;
@@ -123,14 +123,12 @@ export const syncFromServer = async () => {
         }
       }
     }
-   } catch (err) {
+  } catch (err) {
     console.error(err);
   } finally {
     isSyncing = false;
   }
 };
-
-
 
 // ====================================
 // 📊 READ QUERIES (DIPAKAI DI SCREEN)
@@ -138,59 +136,58 @@ export const syncFromServer = async () => {
 
 export const getAllLocalPrices = async () => {
   const dbInst = await getDatabase();
-  // Sama: Filter hanya data terbaru agar tidak ada duplikasi tampilan
   return await dbInst.getAllAsync(`
     SELECT 
-      p.*, 
-      co.name_commodity, 
-      co.image as commodity_static_image, 
+      p.*,
+      co.name_commodity,
+      co.image as commodity_static_image,
       co.local_image,
       c.name_category
     FROM local_prices p
-    LEFT JOIN commodities co ON p.commodity_id = co.id_commodity
-    LEFT JOIN categories c ON co.category_id = c.id_category
-    WHERE p.id IN (
-        SELECT MAX(id) FROM local_prices GROUP BY commodity_id
-    )
-    ORDER BY p.created_at DESC;
+    LEFT JOIN commodities co 
+      ON p.commodity_id = co.id_commodity
+    LEFT JOIN categories c 
+      ON co.category_id = c.id_category
+    ORDER BY p.created_at DESC
   `);
 };
 
 export const getLocalPricesForScreen = async (catId = null, comId = null) => {
   const dbInst = await getDatabase();
+
   let sql = `
-    SELECT 
-      p.*, 
-      co.name_commodity, 
-      c.name_category, 
-      u.name_unit, 
-      m.name_market 
-    FROM (
-      SELECT * FROM local_prices 
-      ORDER BY date DESC, synced ASC, updated_at DESC, created_at DESC
-    ) p
-    LEFT JOIN commodities co ON p.commodity_id = co.id_commodity 
-    LEFT JOIN categories c ON p.category_id = c.id_category 
-    LEFT JOIN units u ON co.unit_id = u.id 
-    LEFT JOIN markets m ON p.market_id = m.id_market 
+    SELECT
+      p.*,
+      co.name_commodity,
+      c.name_category,
+      u.name_unit,
+      m.name_market
+    FROM local_prices p
+    LEFT JOIN commodities co
+      ON p.commodity_id = co.id_commodity
+    LEFT JOIN categories c
+      ON p.category_id = c.id_category
+    LEFT JOIN units u
+      ON co.unit_id = u.id
+    LEFT JOIN markets m
+      ON p.market_id = m.id_market
     WHERE 1=1
   `;
 
   const params = [];
-  
-  if (catId) { 
-    sql += ` AND p.category_id = ?`; 
-    params.push(catId); 
+
+  if (catId) {
+    sql += ` AND p.category_id = ?`;
+    params.push(catId);
   }
-  
-  if (comId) { 
-    sql += ` AND p.commodity_id = ?`; 
-    params.push(comId); 
+
+  if (comId) {
+    sql += ` AND p.commodity_id = ?`;
+    params.push(comId);
   }
-  
-  // Group By dilakukan di akhir untuk memastikan cuma 1 harga per barang
-  sql += ` GROUP BY p.commodity_id ORDER BY p.created_at DESC;`;
-  
+
+  sql += ` ORDER BY p.created_at DESC`;
+
   return await dbInst.getAllAsync(sql, params);
 };
 
@@ -221,7 +218,6 @@ export const countUniqueCommodities = async () => {
   return res?.total || 0;
 };
 
-// Tambahkan di database.js
 export const getDetailHargaForScreen = async (commodityId, dateStr) => {
   const dbInst = await getDatabase();
   return await dbInst.getAllAsync(
@@ -231,12 +227,12 @@ export const getDetailHargaForScreen = async (commodityId, dateStr) => {
         co.image,
         co.local_image, 
         u.name_unit AS master_unit,
-        c.name_category AS kategori_nama -- Tambahkan Join ke Kategori
+        c.name_category AS kategori_nama
      FROM local_prices p 
      LEFT JOIN commodities co ON p.commodity_id = co.id_commodity
      LEFT JOIN units u ON co.unit_id = u.id 
-     LEFT JOIN categories c ON co.category_id = c.id_category -- Join Kategori
-     WHERE p.commodity_id = ? AND p.date = ? 
+     LEFT JOIN categories c ON co.category_id = c.id_category
+     WHERE p.commodity_id = ? AND p.date = ?
      ORDER BY p.synced ASC, p.created_at DESC`,
     [commodityId, dateStr]
   );
@@ -244,8 +240,6 @@ export const getDetailHargaForScreen = async (commodityId, dateStr) => {
 
 export const getDashboardHistoryLocal = async (limit = 10) => {
   const dbInst = await getDatabase();
-
-  // Ambil langsung dari kolom yang ada di local_prices
   return await dbInst.getAllAsync(`
     SELECT 
       id_price,
@@ -272,15 +266,13 @@ export const syncPriceHistoryFromServer = async (commodityId, dateStr) => {
   }
 
   // ✅ KUNCI LANGSUNG (Optimistic Locking)
-  // Tandai "sedang diproses" agar request paralel lain langsung mental
   syncedHistoryCache.add(cacheKey);
 
   try {
     const token = await AsyncStorage.getItem("token");
-    // Jika token tidak ada, buka kunci dan keluar
     if (!token) {
-        syncedHistoryCache.delete(cacheKey);
-        return;
+      syncedHistoryCache.delete(cacheKey);
+      return;
     }
 
     const baseUrl = api.BASE_URL.replace(/\/$/, "");
@@ -296,30 +288,47 @@ export const syncPriceHistoryFromServer = async (commodityId, dateStr) => {
     const dbInst = await getDatabase();
 
     await dbInst.withTransactionAsync(async () => {
-  // 1. Hapus data lama yang sudah tersinkron agar tidak double
-  await dbInst.runAsync(
-    `DELETE FROM local_prices 
-      WHERE commodity_id = ? AND date = ? AND synced = 1`,
-    [commodityId, dateStr]
-  );
+      for (const it of items) {
+        // ✅ PERBAIKAN: gunakan id_price || id
+        const serverId = it.id_price || it.id;
 
-  // 2. JANGAN pakai Set/uniqueKey yang isinya harga.
-  // Langsung masukkan semua data yang datang dari server.
-  for (const it of items) {
-    await dbInst.runAsync(
-      `INSERT INTO local_prices 
-        (commodity_id, price, unit, date, created_at, synced)
-        VALUES (?, ?, ?, ?, ?, 1)`,
-      [
-        commodityId,
-        it.price,
-        it.unit_name || it.unit,
-        dateStr,
-        it.created_at || new Date().toISOString(),
-      ]
-    );
-  }
-});
+        const existing = await dbInst.getFirstAsync(
+          `SELECT id FROM local_prices WHERE server_id = ? LIMIT 1`,
+          [serverId]
+        );
+
+        if (existing) {
+          // ✅ UPDATE saja, tidak buat baris baru
+          await dbInst.runAsync(
+            `UPDATE local_prices 
+             SET price = ?, unit = ?, date = ?, synced = 1, created_at = ?
+             WHERE server_id = ?`,
+            [
+              it.price,
+              it.unit_name || it.unit,
+              dateStr,
+              it.created_at || new Date().toISOString(),
+              serverId
+            ]
+          );
+        } else {
+          // ✅ INSERT hanya kalau belum ada
+          await dbInst.runAsync(
+            `INSERT INTO local_prices
+             (commodity_id, price, unit, date, created_at, synced, server_id)
+             VALUES (?, ?, ?, ?, ?, 1, ?)`,
+            [
+              commodityId,
+              it.price,
+              it.unit_name || it.unit,
+              dateStr,
+              it.created_at || new Date().toISOString(),
+              serverId
+            ]
+          );
+        }
+      }
+    });
 
     console.log(`✅ Sync detail OK: ${cacheKey} (Items: ${items.length})`);
   } catch (e) {
@@ -329,26 +338,20 @@ export const syncPriceHistoryFromServer = async (commodityId, dateStr) => {
   }
 };
 
-
 export const syncAllPricesByDate = async (dateStr) => {
   try {
     const token = await AsyncStorage.getItem("token");
     if (!token) return;
 
-    // URL sesuai endpoint yang kamu berikan
     const url = `${api.BASE_URL.replace(/\/$/, "")}/api/prices?date=${dateStr}`;
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     const json = await res.json();
-    
-    // Ambil array dari properti "data" sesuai JSON kamu
     const items = json.data || [];
 
     if (items.length > 0) {
       const dbInst = await getDatabase();
-      
-      // Gunakan transaksi agar proses lebih cepat dan aman
+
       await dbInst.withTransactionAsync(async () => {
-        // Hapus data rata-rata server (synced=1) untuk tanggal ini agar tidak duplikat
         await dbInst.runAsync(
           `DELETE FROM local_prices WHERE date = ? AND synced = 1`,
           [dateStr]
@@ -356,26 +359,26 @@ export const syncAllPricesByDate = async (dateStr) => {
 
         for (const it of items) {
           await dbInst.runAsync(
-            `INSERT INTO local_prices (commodity_id, price, unit, date, created_at, synced) 
-             VALUES (?, ?, ?, ?, ?, 1)`,
+            `INSERT INTO local_prices (commodity_id, price, unit, date, created_at, synced, server_id) 
+             VALUES (?, ?, ?, ?, ?, 1, ?)`,
             [
-              it.commodity_id, 
-              it.average_price, // Mapping "average_price" ke kolom "price"
-              it.unit_name,     // Mapping "unit_name" ke kolom "unit"
-              it.date, 
-              it.created_at || new Date().toISOString()
+              it.commodity_id,
+              it.average_price,
+              it.unit_name,
+              it.date,
+              it.created_at || new Date().toISOString(),
+              it.id
             ]
           );
         }
       });
+
       console.log(`✅ Berhasil sinkron ${items.length} komoditas untuk tanggal ${dateStr}`);
     }
   } catch (e) {
     console.error("❌ Error syncAllPricesByDate:", e);
   }
 };
-
-
 
 // ==============================
 // ADD PRICE
@@ -387,35 +390,13 @@ export const addPrice = async (comId, catId, price) => {
   const userId = Number(await AsyncStorage.getItem("user_id"));
   const marketId = Number(await AsyncStorage.getItem("market_id"));
 
-  // 🔥 PERBAIKAN TANGGAL MULAI DI SINI 🔥
-  // Kita ambil waktu local device, bukan UTC
-  const nowObj = new Date(); 
-  
+  // 🔥 Ambil tanggal lokal device
+  const nowObj = new Date();
   const year = nowObj.getFullYear();
-  const month = String(nowObj.getMonth() + 1).padStart(2, '0'); // +1 karena Januari = 0
+  const month = String(nowObj.getMonth() + 1).padStart(2, '0');
   const day = String(nowObj.getDate()).padStart(2, '0');
-  
-  // Hasil: "2024-05-25" (Sesuai tanggal HP user)
-  const dateOnly = `${year}-${month}-${day}`; 
-  
-  // created_at tetap ISO agar presisi detiknya tersimpan standar
+  const dateOnly = `${year}-${month}-${day}`;
   const now = nowObj.toISOString();
-  // 🔥 PERBAIKAN SELESAI 🔥
-
-  // ---------------------------------------------------------
-  // LOGIKA KE BAWAH TETAP SAMA SEPERTI SEBELUMNYA
-  // ---------------------------------------------------------
-
-  const existing = await dbInst.getFirstAsync(
-    `SELECT id FROM local_prices WHERE commodity_id = ? AND date = ? AND synced = 0`,
-    [comId, dateOnly]
-  );
-
-  if (existing) {
-    console.log("⚠️ Data sudah ada, melakukan update harga saja.");
-    await updateLocalPrice(existing.id, { price: price, updated_at: now });
-    return { ok: true, message: "Data diperbarui (sebelumnya sudah ada)" };
-  }
 
   const comm = await dbInst.getFirstAsync(
     `SELECT name_commodity, unit_id FROM commodities WHERE id_commodity = ?`,
@@ -427,6 +408,10 @@ export const addPrice = async (comId, catId, price) => {
       `SELECT name_unit FROM units WHERE id = ?`,
       [comm?.unit_id]
     ))?.name_unit || "pcs";
+
+  // ✅ HAPUS pengecekan existing — selalu INSERT baru
+  // Karena market_id = 0 untuk semua, tidak bisa jadi pembeda
+  // Duplikasi dicegah oleh syncPriceHistoryFromServer via server_id
 
   let synced = 0;
 
@@ -444,28 +429,56 @@ export const addPrice = async (comId, catId, price) => {
           user_id: userId,
           market_id: marketId,
           price,
-          date: dateOnly, // Mengirim tanggal yang benar ke server
+          date: dateOnly,
         }),
       });
-      if (res.ok) synced = 1;
+
+      if (res.ok) {
+        const json = await res.json();
+        const serverId = json?.data?.id_price || json?.data?.id || json?.id_price || json?.id || null;
+        synced = 1;
+
+        await dbInst.runAsync(
+          `INSERT INTO local_prices 
+            (commodity_id, category_id, user_id, market_id, price, unit, date, created_at, synced, server_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?)`,
+          [comId, catId, userId, marketId, price, unit, dateOnly, now, synced, serverId]
+        );
+
+        await addRiwayatPendataan({
+          name_commodity: comm?.name_commodity,
+          price,
+          unit,
+          name_category: null,
+          tanggal: now,
+        });
+
+      } else {
+        // Online tapi server error → simpan offline
+        await dbInst.runAsync(
+          `INSERT INTO local_prices 
+            (commodity_id, category_id, user_id, market_id, price, unit, date, created_at, synced)
+            VALUES (?,?,?,?,?,?,?,?,?)`,
+          [comId, catId, userId, marketId, price, unit, dateOnly, now, 0]
+        );
+      }
+    } else {
+      // Offline → simpan tanpa server_id
+      await dbInst.runAsync(
+        `INSERT INTO local_prices 
+          (commodity_id, category_id, user_id, market_id, price, unit, date, created_at, synced)
+          VALUES (?,?,?,?,?,?,?,?,?)`,
+        [comId, catId, userId, marketId, price, unit, dateOnly, now, 0]
+      );
     }
-  } catch (e) {}
-
-  await dbInst.runAsync(
-    `INSERT INTO local_prices 
-      (commodity_id, category_id, user_id, market_id, price, unit, date, created_at, synced)
-      VALUES (?,?,?,?,?,?,?,?,?)`,
-    [comId, catId, userId, marketId, price, unit, dateOnly, now, synced]
-  );
-
-  if (synced === 1) {
-    await addRiwayatPendataan({
-      name_commodity: comm?.name_commodity,
-      price,
-      unit,
-      name_category: null,
-      tanggal: now,
-    });
+  } catch (e) {
+    // Error jaringan → fallback insert offline
+    await dbInst.runAsync(
+      `INSERT INTO local_prices 
+        (commodity_id, category_id, user_id, market_id, price, unit, date, created_at, synced)
+        VALUES (?,?,?,?,?,?,?,?,?)`,
+      [comId, catId, userId, marketId, price, unit, dateOnly, now, 0]
+    );
   }
 
   return { ok: synced === 1 };
@@ -473,45 +486,26 @@ export const addPrice = async (comId, catId, price) => {
 
 export const updateLocalPrice = async (id, data) => {
   const dbInst = await getDatabase();
-  
-  // 1. Ambil data lama dulu untuk keperluan riwayat (Nama Komoditas & Kategori)
-  // Ini penting agar di Riwayat muncul namanya, bukan cuma angka
-  const currentItem = await dbInst.getFirstAsync(
-    `SELECT p.*, co.name_commodity, c.name_category 
-     FROM local_prices p 
-     LEFT JOIN commodities co ON p.commodity_id = co.id_commodity
-     LEFT JOIN categories c ON co.category_id = c.id_category
-     WHERE p.id = ?`, [id]
-  );
 
   const fields = []; const params = [];
   if (data.price !== undefined) { fields.push("price = ?"); params.push(data.price); }
   if (data.unit !== undefined) { fields.push("unit = ?"); params.push(data.unit); }
   if (data.synced !== undefined) { fields.push("synced = ?"); params.push(data.synced); }
+  if (data.server_id !== undefined) {
+    fields.push("server_id = ?");
+    params.push(data.server_id);
+  }
   fields.push("updated_at = ?"); params.push(new Date().toISOString());
   params.push(id);
-  
-  // 2. Eksekusi Update ke tabel utama
-  await dbInst.runAsync(`UPDATE local_prices SET ${fields.join(", ")} WHERE id = ?;`, params);
 
-  // 3. TAMBAHKAN KE RIWAYAT PENDATAAN
-  if (currentItem) {
-    await addRiwayatPendataan({
-      name_commodity: currentItem.name_commodity,
-      price: data.price || currentItem.price,
-      unit: data.unit || currentItem.unit,
-      name_category: currentItem.name_category,
-      tanggal: new Date().toISOString(),
-      synced: 0 // Biar statusnya "Belum Tersinkron" di Riwayat
-    });
-  }
+  // Hanya UPDATE, tidak INSERT riwayat di sini
+  await dbInst.runAsync(`UPDATE local_prices SET ${fields.join(", ")} WHERE id = ?;`, params);
 };
 
 // deleteLocalPrice tetap seperti punya kamu (TIDAK DIUBAH)
 export const deleteLocalPrice = async (id, itemData = null) => {
   const dbInst = await getDatabase();
-  
-  // Jika ada data item, masukkan ke tabel riwayat_hapus
+
   if (itemData) {
     await addRiwayatHapus({
       name_commodity: itemData.name_commodity,
@@ -521,9 +515,38 @@ export const deleteLocalPrice = async (id, itemData = null) => {
       tanggal: new Date().toISOString()
     });
   }
-  
-  // Hapus dari tabel utama
+
   await dbInst.runAsync(`DELETE FROM local_prices WHERE id = ?;`, [id]);
+};
+
+// Edit Data Online
+export const updatePriceOnline = async (id, price) => {
+  const token = await AsyncStorage.getItem("token");
+
+  const res = await fetch(`${api.BASE_URL}/price/${id}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ price }),
+  });
+
+  const text = await res.text();
+  console.log("🌐 RAW RESPONSE:", text);
+
+  let json;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch (e) {
+    throw new Error("Response bukan JSON (kemungkinan error server)");
+  }
+
+  if (!res.ok) {
+    throw new Error(json?.message || "Gagal update server");
+  }
+
+  return json;
 };
 
 // ====================================
@@ -539,19 +562,12 @@ export const restoreAllPricesFromServer = async (selectedDate) => {
 
     const dbInst = await getDatabase();
 
-    // ✅ INI YANG KEMARIN HILANG
     const res = await fetch(
       `${api.BASE_URL.replace(/\/$/, "")}/price/all?date=${selectedDate}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
 
-    if (!res.ok) {
-      throw new Error("Gagal mengambil data dari server");
-    }
+    if (!res.ok) throw new Error("Gagal mengambil data dari server");
 
     const json = await res.json();
     const items = json?.data || [];
@@ -565,14 +581,15 @@ export const restoreAllPricesFromServer = async (selectedDate) => {
       for (const it of items) {
         await dbInst.runAsync(
           `INSERT INTO local_prices
-           (commodity_id, price, unit, date, created_at, synced)
-           VALUES (?, ?, ?, ?, ?, 1)`,
+           (commodity_id, price, unit, date, created_at, synced, server_id)
+           VALUES (?, ?, ?, ?, ?, 1, ?)`,
           [
             it.commodity_id,
             it.price || it.average_price,
             it.unit_name || it.unit,
             selectedDate,
             it.created_at || new Date().toISOString(),
+            it.id
           ]
         );
       }
@@ -600,28 +617,80 @@ export const syncPricesToServer = async () => {
         co.name_commodity,
         c.name_category
       FROM local_prices p
-      LEFT JOIN commodities co ON p.commodity_id = co.id_commodity
-      LEFT JOIN categories c ON co.category_id = c.id_category
+      LEFT JOIN commodities co 
+        ON p.commodity_id = co.id_commodity
+      LEFT JOIN categories c 
+        ON co.category_id = c.id_category
       WHERE p.synced = 0
     `);
 
     if (!token || unsynced.length === 0) return;
 
     for (const item of unsynced) {
-      const res = await fetch(api.ADD_PRICE, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          commodity_id: item.commodity_id,
-          price: item.price,
-          date: item.date,
-        }),
-      });
+      let res;
+      let json = null;
+
+      // ====================================
+      // UPDATE DATA YANG SUDAH ADA DI SERVER
+      // ====================================
+      if (item.server_id) {
+        console.log("✏️ UPDATE SERVER:", item.server_id);
+
+        res = await fetch(
+          `${api.BASE_URL}/price/${item.server_id}`,
+          {
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ price: item.price }),
+          }
+        );
+      } else {
+        // ====================================
+        // INSERT DATA BARU KE SERVER
+        // ====================================
+        console.log("➕ INSERT SERVER");
+
+        res = await fetch(api.ADD_PRICE, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            commodity_id: item.commodity_id,
+            user_id: item.user_id,
+            market_id: item.market_id,
+            price: item.price,
+            date: item.date,
+          }),
+        });
+      }
+
+      // ====================================
+      // HANDLE RESPONSE
+      // ====================================
+      const text = await res.text();
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch (e) {
+        console.log("⚠️ Response bukan JSON:", text);
+      }
 
       if (res.ok) {
+        // ✅ PERBAIKAN: ambil server_id dari response
+        const newServerId =
+          item.server_id ||
+          json?.data?.id_price ||
+          json?.data?.id ||
+          json?.id_price ||
+          json?.id ||
+          null;
+
+        console.log("🔥 SERVER ID FINAL:", newServerId);
+
         // 1️⃣ CATAT RIWAYAT
         await addRiwayatPendataan({
           name_commodity: item.name_commodity,
@@ -631,11 +700,19 @@ export const syncPricesToServer = async () => {
           tanggal: item.date,
         });
 
-        // 2️⃣ TANDAI SYNCED (JANGAN DELETE)
+        // 2️⃣ TANDAI SYNCED + SIMPAN SERVER_ID ✅
         await dbInst.runAsync(
-          `UPDATE local_prices SET synced = 1, updated_at = ? WHERE id = ?`,
-          [new Date().toISOString(), item.id]
+          `UPDATE local_prices
+           SET synced = 1,
+               server_id = ?,
+               updated_at = ?
+           WHERE id = ?`,
+          [newServerId, new Date().toISOString(), item.id]
         );
+
+        console.log("✅ Sync sukses:", item.id);
+      } else {
+        console.log("❌ Sync gagal:", res.status, json);
       }
     }
   } catch (e) {
@@ -645,9 +722,8 @@ export const syncPricesToServer = async () => {
   }
 };
 
-
 // ====================================
-// 📋 FUNGSI RIWAYAT (YANG KURANG)
+// 📋 FUNGSI RIWAYAT
 // ====================================
 
 export const getAllRiwayatPendataan = async () => {
@@ -681,7 +757,7 @@ export const getAllRiwayatHapus = async () => {
 };
 
 // -----------------------------
-// EXPORT DEFAULT (PASTIKAN SEMUA NAMA ADA DI SINI)
+// EXPORT DEFAULT
 // -----------------------------
 export default {
   initDatabase,

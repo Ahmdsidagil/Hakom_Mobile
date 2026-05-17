@@ -2,25 +2,12 @@
 // 📱 InputScreen.js (STYLE ASLI + HEADER GRADASI + SMART NOTIF)
 // ===============================
 import React, { useEffect, useState, useRef } from "react";
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  Image,
-  Modal,
-  Animated,
-} from "react-native";
+import {View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, Image, Modal, Animated,} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-
-// ✅ 1. Import Tambahan (Gradasi & NetInfo)
 import { LinearGradient } from "expo-linear-gradient";
 import NetInfo from "@react-native-community/netinfo";
+import API from "../../config/api";
 
 import {
   getCategories,
@@ -241,7 +228,18 @@ export default function InputScreen({ navigation }) {
 
       // 4. Tampilkan Popup
       showPopup("success", `${namaKomoditas} tersimpan`);
+
+      // reset harga aja
       setPrice("");
+
+      // tetap pilih komoditas & satuan
+      // biar bisa input lagi cepat
+
+      setTimeout(() => {
+        priceRef.current?.focus?.();
+      }, 200);
+
+return;
       
     } catch (e) {
       console.error(e);
@@ -263,7 +261,7 @@ export default function InputScreen({ navigation }) {
     selectedCategories.some((cat) => c.category_id === cat.id_category)
   );
 
-  const SERVER = "http://103.100.27.57:5000/";
+  const SERVER = `${API.SERVER_URL}/`;
   const safeImage = (img) =>
     img ? { uri: img.startsWith("http") ? img : SERVER + img } : null;
 
@@ -395,7 +393,7 @@ export default function InputScreen({ navigation }) {
 const styles = StyleSheet.create({
   header: {
     // backgroundColor dihapus agar gradasi terlihat
-    paddingTop: 50,
+    paddingTop: 40,
     paddingBottom: 16,
     paddingHorizontal: 16,
     flexDirection: "row",

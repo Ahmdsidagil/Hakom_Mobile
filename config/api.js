@@ -2,7 +2,7 @@
 // 📦 config/api.js
 // ========================================
 
-const BASE_URL = "http://103.100.27.57:5100/api";
+const BASE_URL = "http://192.168.100.212:8000/api";
 
 export default {
   BASE_URL,
@@ -21,6 +21,7 @@ export default {
   // 📊 Harga (Operations)
   ADD_PRICE: `${BASE_URL}/sync/price`,     // Input single
   SYNC_PRICES: `${BASE_URL}/sync`,         // Batch sync
+  UPDATE_PRICE: `${BASE_URL}/price`,
   
   // ⬇️ Restore & History
   PRICE_ALL: `${BASE_URL}/price/all`,

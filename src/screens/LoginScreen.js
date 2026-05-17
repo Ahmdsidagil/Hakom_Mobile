@@ -97,6 +97,7 @@ export default function LoginScreen({ navigation }) {
       const user = await userInfo(data.token);
       if (user) {
         await AsyncStorage.setItem("user", JSON.stringify(user));
+        await AsyncStorage.setItem("user_name", user.user_name || "User"); // 🔥 pakai field user_name
       }
 
       // ===============================
@@ -136,7 +137,10 @@ export default function LoginScreen({ navigation }) {
       } catch (err) { console.warn("Fetch unit err"); }
 
       // ✅ SUKSES LOGIN MODERN
-      showToast(`Selamat datang, ${user?.name || "User"}!`, "success");
+      const userName = user.user_name || "User";
+      showToast(`Selamat datang, ${userName}!`, "success");
+
+
       
       // Beri jeda sedikit agar notifikasi terlihat sebelum pindah layar
       setTimeout(() => {

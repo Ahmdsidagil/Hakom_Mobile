@@ -11,6 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import NetInfo from "@react-native-community/netinfo";
 import { LinearGradient } from "expo-linear-gradient"; 
+import BASE_URL from "../../config/api";
 
 // ✅ 1. Import Helper Notifikasi
 import { pushNotification } from "../../src/screens/NotificationScreen";
@@ -25,7 +26,6 @@ import {
 // ========================
 // 🛠 CONFIG & HELPERS
 // ========================
-const BASE_URL = "http://103.100.27.57:5100"; 
 
 // Helper Tanggal Aman
 const safeDate = (dateInput) => {
@@ -111,7 +111,6 @@ export default function DetailHargaScreen() {
     });
 
     // ✅ PERBAIKAN: Langsung tampilkan semua data (3 item dari log akan muncul semua)
-    // Tidak perlu lagi memisahkan syncedItems dan localItems lalu memfilternya
     const finalData = [...parsedData].sort((a, b) => b.timeMs - a.timeMs);
     
     setDisplayItems(finalData);
@@ -164,30 +163,41 @@ export default function DetailHargaScreen() {
     };
   }, [displayItems, satuan]);
 
-  const handleItemPress = (item) => {
-    if (selectionMode) {
-      if (item.isSynced) return; 
-      const isSelected = selectedIds.includes(item.uiId);
-      const newSelected = isSelected ? selectedIds.filter(id => id !== item.uiId) : [...selectedIds, item.uiId];
-      setSelectedIds(newSelected);
-      if (newSelected.length === 0) setSelectionMode(false);
-    } else if (!item.isSynced) {
-      navigation.navigate("EditData", {
-        item: {
-          ...item,
-          id: item.uiId, 
-          nama_komoditas: nama_komoditas, 
-          kategori: item.finalCategory, 
-          satuan: item.finalUnit,
-          local_image: item.imageSource?.uri,
-          price: item.priceNum
-        },
-        onGoBack: () => fetchData(true),  
-      });
-    } else {
-        Alert.alert("Tersinkron", "Data server tidak dapat diedit.");
-    }
-  };
+ const handleItemPress = (item) => {
+  if (selectionMode) {
+    const isSelected = selectedIds.includes(item.uiId);
+    const newSelected = isSelected
+      ? selectedIds.filter(id => id !== item.uiId)
+      : [...selectedIds, item.uiId];
+
+    setSelectedIds(newSelected);
+
+    if (newSelected.length === 0) setSelectionMode(false);
+    return;
+  }
+
+  // 🔥 ALLOW ALL DATA TO EDIT (LOCAL + SYNCED)
+  console.log("ITEM ASLI:", item);
+  console.log("SERVER ID ASLI:", item.server_id);
+  console.log("ID SQLITE ASLI:", item.id);
+
+  navigation.navigate("EditData", {
+    item: {
+      ...item,
+      id: item.id,
+      server_id: item.server_id || item.id_price,
+      nama_komoditas: nama_komoditas,
+      kategori: item.finalCategory,
+      satuan: item.finalUnit,
+      local_image: item.imageSource?.uri,
+      price: item.priceNum || item.price,
+
+      // penting untuk backend update
+      synced: item.isSynced ? 1 : 0,
+    },
+    onGoBack: () => fetchData(true),
+  });
+};
 
   // ========================
   // 🗑️ DELETE LOGIC (UPDATED)
@@ -251,7 +261,7 @@ export default function DetailHargaScreen() {
           <Ionicons name={selectionMode ? "close" : "arrow-back"} size={26} color="#fff" />
         </TouchableOpacity>
         
-        {/* ✅ Title dipindah ke kiri (sebelah arrow) */}
+        {/*  Title dipindah ke kiri */}
         <Text style={styles.headerTitle}>
             {selectionMode ? `${selectedIds.length} Dipilih` : "Detail Harga"}
         </Text>
@@ -336,7 +346,7 @@ export default function DetailHargaScreen() {
                     </View>
                   </View>
 
-                  {!item.isSynced && !selectionMode && (
+                  {!selectionMode && (
                     <Ionicons name="create-outline" size={20} color="#94A3B8" />
                   )}
                 </View>
@@ -365,20 +375,19 @@ export default function DetailHargaScreen() {
 // Styles
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#F8FAFC" },
-  header: {
-    paddingTop: 50,
-    paddingBottom: 15,
-    paddingHorizontal: 20,
+   header: {
+    // backgroundColor dihapus agar gradasi terlihat
+    paddingTop: 30,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
     flexDirection: "row",
     alignItems: "center",
-  
   },
   headerTitle: {
     color: "#fff",
     fontSize: 18,
-    fontWeight: "800",
-    marginLeft: 15, // ✅ Geser ke kiri
-    letterSpacing: 0.5,
+    fontWeight: "700",
+    marginLeft: 10,
   },
   dateBar: {
     flexDirection: "row",

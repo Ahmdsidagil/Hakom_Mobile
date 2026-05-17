@@ -1,5 +1,5 @@
 /// ====================================================
-// 📱 DataLocalScreen.js (FIXED DATA HILANG/KEDIP)
+// 📱 DataLocalScreen.js 
 // ====================================================
 import React, { useState, useCallback, useMemo, useEffect } from "react";
 import {
@@ -18,6 +18,7 @@ import { useFocusEffect, useRoute } from "@react-navigation/native";
 import NetInfo from "@react-native-community/netinfo";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import API from "../../config/api";
 
 import {
   getAllLocalPrices,
@@ -26,7 +27,7 @@ import {
 } from "../../config/database";
 
 // ========================
-// 🛠️ HELPER FUNCTIONS (FINAL)
+// 🛠️ HELPER FUNCTIONS 
 // ========================
 
 // ✅ Aman parsing harga
@@ -97,7 +98,7 @@ export const mergeDateAndTime = (dateStr, timeSource) => {
   return baseDate;
 };
 
-// 🔥 Format tanggal + jam (24 Ags 2024, 14.32)
+// 🔥 Format tanggal + jam 
 export const formatTanggalItem = (tgl) => {
   if (!tgl) return "-";
 
@@ -132,13 +133,18 @@ const getSyncedPricesWithPersistence = async (selectedDateStr) => {
     try {
       const token = await AsyncStorage.getItem("token");
       if (token) {
-        const res = await fetch(`http://103.100.27.57:5100/api/prices?date=${selectedDateStr}`, {
-           headers: { Authorization: `Bearer ${token}` }
-        });
+        const res = await fetch(
+          `${API.PRICE}?date=${selectedDateStr}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
         const json = await res.json();
         if (json.data && Array.isArray(json.data)) {
            for (const item of json.data) {
-             const idPrice = `server-${item.commodity_id}-${selectedDateStr}`;
+             const idPrice = item.id_price;
              await db.runAsync(
                `INSERT OR REPLACE INTO server_prices_cache (id_price, commodity_id, name_commodity, raw_price, name_unit, name_category, date, created_at, image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                [idPrice, item.commodity_id, item.commodity_name, item.average_price, item.unit_name, item.category_name, selectedDateStr, item.created_at || new Date().toISOString(), item.image]
@@ -182,7 +188,7 @@ export default function DataLocalScreen({ navigation }) {
 
     const dateStr = getLocalYMD(selectedDate);
     const server = await getSyncedPricesWithPersistence(dateStr);
-    const local = await getLocalPricesLast30Days();
+    const local = await getAllLocalPrices();
 
     if (!isActive) return;
 
@@ -254,6 +260,7 @@ export default function DataLocalScreen({ navigation }) {
   const groups = new Map();
 
   dataKomoditas.forEach(item => {
+    const itemDate = item.date || getLocalYMD(item.tanggal);
     if (item.date !== dateStr) return;
     if (search && !item.nama.toLowerCase().includes(search.toLowerCase())) return;
 
@@ -459,7 +466,7 @@ export default function DataLocalScreen({ navigation }) {
                 <Text style={styles.itemName}>{item.nama}</Text>
                 <Text style={styles.itemPrice}>{item.harga} / {item.satuan}</Text>
                 <Text style={styles.avgPrice}>
-                   {item.status === "Tersinkron" ? "Harga Rata-Rata" : `Inputan (${item.localCount} data)`}
+                  Harga Rata-Rata
                 </Text>
                 <Text style={styles.itemDate}>Update harga : {item.displayDate}</Text>
               </View>

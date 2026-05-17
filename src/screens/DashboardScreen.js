@@ -15,6 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
 import { useFocusEffect } from "@react-navigation/native";
+import BASE_URL from "../../config/api";
 
 import BottomNav from "../components/BottomNav";
 
@@ -88,7 +89,7 @@ export default function DashboardScreen({ navigation }) {
 
     for (const item of unsyncedData) {
       try {
-        const response = await fetch("http://103.100.27.57:5000/api/prices", {
+         const response = await fetch(API.PRICE, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
