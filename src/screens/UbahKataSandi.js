@@ -44,12 +44,25 @@ export default function UbahKataSandiScreen({ navigation }) {
       const res = await updatePassword(token, sandiLama, sandiBaru);
 
       if (res && res.success) {
-        Alert.alert("Berhasil", "Kata sandi berhasil diubah!", [
-          { text: "OK", onPress: () => navigation.goBack() },
-        ]);
-      } else {
-        Alert.alert("Gagal", res.message || "Gagal mengubah kata sandi.");
-      }
+
+      // hapus token login
+      await AsyncStorage.removeItem("token");
+
+      Alert.alert(
+        "Berhasil",
+        "Kata sandi berhasil diubah, silakan login kembali.",
+        [
+          {
+            text: "OK",
+            onPress: () => navigation.replace("Login"),
+          },
+        ]
+      );
+
+    } else {
+      Alert.alert("Gagal", res.message || "Gagal mengubah kata sandi.");
+    }
+
     } catch (err) {
       console.error("❌ Error ubah sandi:", err);
       Alert.alert("Error", "Terjadi kesalahan saat mengubah sandi.");
